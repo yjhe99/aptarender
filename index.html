@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AptaRender — oligo 2D structure art</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f242e; --line:#2a303c;
+    --text:#e6e9ef; --muted:#9aa4b2; --accent:#5b8cff; --accent2:#3ad0a0;
+    --danger:#e15554;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    color:var(--text); background:var(--bg); display:flex; overflow:hidden;
+  }
+  #panel{
+    width:320px; min-width:320px; height:100vh; overflow-y:auto;
+    background:var(--panel); border-right:1px solid var(--line); padding:14px 14px 40px;
+  }
+  #stage{flex:1; position:relative; background:
+    radial-gradient(circle at 20% 20%, #12151c, #0c0e12);}
+  svg#canvas{width:100%; height:100%; display:block; cursor:grab}
+  svg#canvas.panning{cursor:grabbing}
+  h1{font-size:15px; margin:0 0 2px; letter-spacing:.3px}
+  .sub{color:var(--muted); font-size:11px; margin:0 0 14px}
+  .grp{background:var(--panel2); border:1px solid var(--line); border-radius:9px;
+       padding:11px 11px 12px; margin-bottom:11px}
+  .grp h2{font-size:11px; text-transform:uppercase; letter-spacing:.6px;
+          color:var(--muted); margin:0 0 9px; font-weight:600}
+  label{display:block; font-size:11px; color:var(--muted); margin:8px 0 3px}
+  textarea,input[type=text]{
+    width:100%; background:#0e1117; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:7px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:12px; resize:vertical;
+  }
+  textarea{white-space:pre; overflow-wrap:normal; overflow-x:auto}
+  .row{display:flex; gap:8px; align-items:center}
+  .row>*{flex:1}
+  button{
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:7px 9px; cursor:pointer; font-size:12px;
+  }
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600}
+  button.mini{padding:4px 7px; font-size:11px; flex:0 0 auto}
+  input[type=range]{width:100%}
+  input[type=color]{width:100%; height:26px; padding:0; border:1px solid var(--line);
+    border-radius:6px; background:#0e1117; cursor:pointer}
+  select{width:100%; background:#0e1117; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:6px; font-size:12px; cursor:pointer}
+  input[type=number]{width:56px; background:#0e1117; color:var(--text);
+    border:1px solid var(--line); border-radius:6px; padding:4px 6px; font-size:12px}
+  .val{color:var(--text); font-variant-numeric:tabular-nums}
+  .flexlabel{display:flex; justify-content:space-between; align-items:center}
+  .chk{display:flex; align-items:center; gap:7px; margin:6px 0; color:var(--text); font-size:12px}
+  .chk input{flex:0 0 auto}
+  .idrow{display:flex; align-items:center; gap:8px; margin:5px 0}
+  .idrow span{width:16px; font-family:ui-monospace,monospace; font-weight:700}
+  .idrow input[type=color]{height:22px; width:44px; flex:0 0 auto}
+  .hint{color:var(--muted); font-size:10.5px; margin-top:6px; line-height:1.5}
+  #err{color:var(--danger); font-size:11px; margin-top:6px; min-height:0; white-space:pre-wrap}
+  .badge{position:absolute; top:10px; right:12px; background:var(--panel);
+    border:1px solid var(--line); border-radius:20px; padding:5px 11px; color:var(--muted);
+    font-size:11px; pointer-events:none}
+  .split{display:flex; gap:6px}
+  .base-hit{cursor:pointer}
+  .bond-hit{cursor:pointer}
+  .grp.tight{padding-bottom:6px}
+  a.link{color:var(--accent); cursor:pointer; text-decoration:underline; font-size:11px}
+  #contact .contact-by{margin:0; font-size:12px; color:var(--text)}
+  #contact a.link{display:inline-block; margin-top:6px; font-size:12px; font-weight:600}
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>AptaRender</h1>
+  <p class="sub">Dot-bracket → editable 2D art. No prediction — you supply the structure.</p>
+
+  <div class="grp">
+    <h2>Input</h2>
+    <label>Sequence (A/U/T/G/C)</label>
+    <textarea id="seq" rows="3" spellcheck="false"></textarea>
+    <label>Dot-bracket structure</label>
+    <textarea id="dot" rows="3" spellcheck="false"></textarea>
+    <div class="row" style="margin-top:9px">
+      <button class="primary" id="render">Render</button>
+      <button class="mini" id="ex1">Hairpin</button>
+      <button class="mini" id="ex2">Multiloop</button>
+    </div>
+    <div id="err"></div>
+    <div class="hint">Use nested <code>( )</code> and <code>.</code> for the structure.
+      Drag the background to pan, scroll to zoom.</div>
+  </div>
+
+  <div class="grp">
+    <h2>Type &amp; size</h2>
+    <div class="flexlabel"><label>Font size</label><span class="val" id="fontVal">18 px</span></div>
+    <input type="range" id="font" min="8" max="60" value="18">
+    <div class="flexlabel"><label>Rotate structure (text stays upright)</label><span class="val" id="rotVal">0°</span></div>
+    <input type="range" id="rot" min="0" max="360" value="0">
+    <div class="row" style="margin-top:8px">
+      <button class="mini" id="fit">Fit to view</button>
+      <button class="mini" id="reset0">Rotation 0°</button>
+    </div>
+  </div>
+
+  <div class="grp">
+    <h2>Color by base</h2>
+    <div class="idrow"><span>A</span><input type="color" data-id="A" value="#4c9f70"></div>
+    <div class="idrow"><span>U</span><input type="color" data-id="U" value="#e15554"></div>
+    <div class="idrow"><span>T</span><input type="color" data-id="T" value="#e1bc29"></div>
+    <div class="idrow"><span>G</span><input type="color" data-id="G" value="#7768ae"></div>
+    <div class="idrow"><span>C</span><input type="color" data-id="C" value="#3b8ea5"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="mini" id="applyId">Apply palette</button>
+    </div>
+    <label>Monochrome letter color</label>
+    <div class="row">
+      <input type="color" id="monoColor" value="#000000">
+      <button class="mini" id="mono">Apply monochrome</button>
+    </div>
+  </div>
+
+  <div class="grp">
+    <h2>Selected bases</h2>
+    <div class="hint" style="margin-top:0">Click a base to select. Shift-click to add.
+      Click empty space to clear.</div>
+    <label>Color for selection</label>
+    <input type="color" id="selColor" value="#ffd166">
+    <div class="row" style="margin-top:8px">
+      <button class="mini" id="applySel">Apply to selection</button>
+      <button class="mini" id="selAll">Select all</button>
+      <button class="mini" id="selNone">Clear</button>
+    </div>
+    <div class="hint" id="selInfo">none selected</div>
+  </div>
+
+  <div class="grp">
+    <h2>H-bonds</h2>
+    <div class="hint" style="margin-top:0">Click a base-pair rung to select it. Shift-click to add.
+      Unselected rungs use the global rung color.</div>
+    <label>Color for selected bonds</label>
+    <input type="color" id="bondColor" value="#e15554">
+    <div class="row" style="margin-top:8px">
+      <button class="mini" id="applyBond">Apply to selection</button>
+      <button class="mini" id="bondAll">Select all</button>
+      <button class="mini" id="bondReset">Reset colors</button>
+    </div>
+    <div class="hint" id="bondInfo">none selected</div>
+  </div>
+
+  <div class="grp">
+    <h2>Bases</h2>
+    <label class="chk"><input type="checkbox" id="cLetter" checked> Show base letters</label>
+    <label class="chk"><input type="checkbox" id="cBold"> Bold letters</label>
+    <label class="chk"><input type="checkbox" id="cCircle"> Base circles</label>
+    <label>Circle frame</label>
+    <div class="split">
+      <select id="frameMode">
+        <option value="custom">Custom color</option>
+        <option value="base">By base color</option>
+        <option value="none">None</option>
+      </select>
+      <input type="color" id="frameColor" value="#000000" style="flex:0 0 46px">
+    </div>
+    <div class="flexlabel"><label>Frame thickness</label><span class="val" id="frameWVal">2 px</span></div>
+    <input type="range" id="frameW" min="0.5" max="12" step="0.5" value="2">
+    <label>Circle fill</label>
+    <div class="split">
+      <select id="fillMode">
+        <option value="custom" selected>Custom color</option>
+        <option value="none">None</option>
+        <option value="base">By base color</option>
+      </select>
+      <input type="color" id="fillColor" value="#ffffff" style="flex:0 0 46px">
+    </div>
+  </div>
+
+  <div class="grp">
+    <h2>Layout &amp; lines</h2>
+    <label class="chk"><input type="checkbox" id="cBack" checked> Backbone line</label>
+    <label class="chk"><input type="checkbox" id="cPair" checked> Base-pair rungs</label>
+    <label>Free 5′/3′ tails</label>
+    <select id="tailMode">
+      <option value="natural">Natural (curved)</option>
+      <option value="flatten">Flatten (straight)</option>
+      <option value="L">L-shape (90° corner)</option>
+      <option value="perp">Perpendicular (90° out)</option>
+    </select>
+    <label class="flexlabel"><span>Backbone / rung color</span></label>
+    <div class="split">
+      <input type="color" id="backColor" value="#4b5563">
+      <input type="color" id="pairColor" value="#6b7280">
+    </div>
+    <div class="idrow" style="margin-top:8px">
+      <span style="width:auto;font-weight:400;color:var(--muted);font-size:11px">Number every</span>
+      <input type="number" id="numEvery" min="0" value="0"> <span style="width:auto;color:var(--muted);font-size:11px">nt (0=off)</span>
+    </div>
+  </div>
+
+  <div class="grp">
+    <h2>Canvas</h2>
+    <label>Background</label>
+    <input type="color" id="bgColor" value="#ffffff">
+    <label class="chk" style="margin-top:8px"><input type="checkbox" id="cTransparent"> Transparent background on export</label>
+  </div>
+
+  <div class="grp tight">
+    <h2>Export</h2>
+    <div class="flexlabel"><label>PNG scale</label><span class="val" id="pngDims">—</span></div>
+    <input type="range" id="pngScale" min="1" max="12" step="1" value="2">
+    <div class="row" style="margin-top:8px">
+      <button class="mini" id="expSvg">SVG</button>
+      <button class="mini" id="expPng">PNG</button>
+    </div>
+    <div class="hint">SVG stays fully editable in Illustrator/Inkscape — every base is its own text element. PNG dimensions shown above.</div>
+  </div>
+
+  <div class="grp tight" id="contact">
+    <h2>Contact &amp; feedback</h2>
+    <p class="contact-by">Built by <strong>Janet He</strong> with Claude</p>
+    <p class="hint" style="margin-top:2px">Still under development — feedback &amp; suggestions are very welcome.</p>
+    <a class="link" href="mailto:yjhe@utexas.edu?subject=AptaRender%20feedback">yjhe@utexas.edu</a>
+  </div>
+</div>
+
+<div id="stage">
+  <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div class="badge" id="badge">—</div>
+</div>
+
+<script>
+"use strict";
+const SVGNS="http://www.w3.org/2000/svg";
+const $=id=>document.getElementById(id);
+
+/* ---------- model ---------- */
+const M = {
+  seq:"", n:0,
+  pt:[],          // nested () pair table, -1 if unpaired
+  pkPairs:[],     // [ [i,j], ... ] pseudoknot pairs
+  x:[], y:[],     // model coords (px units)
+  color:[],       // per-base text/fill color
+  bondColor:{},   // per-H-bond color, keyed by lower base index; falls back to global
+  selected:new Set(),
+  selBond:new Set(),
+  // view
+  zoom:1, panX:0, panY:0,
+  rot:0, font:18,
+  palette:{A:"#4c9f70",U:"#e15554",T:"#e1bc29",G:"#7768ae",C:"#3b8ea5"},
+};
+
+/* ---------- parse dot-bracket (with pseudoknots) ---------- */
+const OPEN={'(':')','[':']','{':'}','<':'>'};
+const CLOSE={')':'(',']':'[','}':'{','>':'<'};
+function parseStructure(seq, dot){
+  seq = seq.replace(/\s+/g,"").toUpperCase();
+  dot = dot.replace(/\s+/g,"");
+  if(seq.length===0) throw "Sequence is empty.";
+  if(dot.length===0) throw "Structure is empty.";
+  if(seq.length!==dot.length)
+    throw `Length mismatch: sequence is ${seq.length} nt, structure is ${dot.length}.`;
+  const bad = seq.match(/[^AUTGCN]/);
+  if(bad) throw `Unexpected character "${bad[0]}" in sequence (allowed: A U T G C N).`;
+  const n=dot.length;
+  const pt=new Array(n).fill(-1);
+  const stack=[];
+  for(let i=0;i<n;i++){
+    const c=dot[i];
+    if(c==='.'||c==='-'||c===':'||c===','){continue;}
+    else if(c==='('){ stack.push(i); }
+    else if(c===')'){
+      if(stack.length===0) throw `Unbalanced ")" at position ${i+1}.`;
+      const j=stack.pop(); pt[i]=j; pt[j]=i;
+    }
+    else if('[]{}<>'.includes(c))
+      throw `Pseudoknot bracket "${c}" at position ${i+1} — only nested ( ) . are supported for now.`;
+    else throw `Unexpected character "${c}" in structure at position ${i+1}.`;
+  }
+  if(stack.length) throw `Unbalanced "(" — ${stack.length} left open.`;
+  return {seq,n,pt,pk:[]};
+}
+
+/* ---------- radial layout (our own) ---------- */
+const SPACING = 42;   // model-space distance between bases (independent of font size)
+function computeLayout(n, pt, S, tailMode){
+  const x=new Array(n).fill(0), y=new Array(n).fill(0);
+
+  // build a stem outward from a loop center, then recurse into the child loop
+  function buildStem(a,b,cx,cy){
+    // a,b already positioned (outer rung on parent loop). axis = outward from center.
+    let ux=(x[a]+x[b])/2-cx, uy=(y[a]+y[b])/2-cy;
+    let len=Math.hypot(ux,uy)||1; ux/=len; uy/=len;
+    // count stacked pairs
+    let L=1;
+    while(a+L < b-L && pt[a+L]===b-L) L++;
+    for(let t=1;t<L;t++){
+      x[a+t]=x[a]+ux*S*t; y[a+t]=y[a]+uy*S*t;
+      x[b-t]=x[b]+ux*S*t; y[b-t]=y[b]+uy*S*t;
+    }
+    const a2=a+L-1, b2=b-L+1;
+    // child loop lies further out; its outward normal points back toward parent (-u)
+    drawLoop(a2,b2,-ux,-uy);
+  }
+
+  // place a loop whose closing pair (ci,cj) is already positioned.
+  // (aoutX,aoutY): unit vector from loop center toward the closing pair (outward).
+  function drawLoop(ci,cj,aoutX,aoutY){
+    // gather items strictly between ci and cj
+    const items=[];
+    let k=ci+1;
+    while(k<=cj-1){
+      if(pt[k]===-1){ items.push({t:'b',i:k}); k++; }
+      else { items.push({t:'p',a:k,b:pt[k]}); k=pt[k]+1; }
+    }
+    let m=2; for(const it of items) m += (it.t==='p'?2:1);
+    if(m<2) m=2;
+    const r = S/(2*Math.sin(Math.PI/m));
+    const h = r*Math.cos(Math.PI/m);
+    const Mx=(x[ci]+x[cj])/2, My=(y[ci]+y[cj])/2;
+    const cx=Mx-aoutX*h, cy=My-aoutY*h;      // center sits inside the loop
+    const th0=Math.atan2(y[ci]-cy, x[ci]-cx);
+    const thE=Math.atan2(y[cj]-cy, x[cj]-cx);
+    const D=2*Math.PI/m;
+    let d=thE-th0; while(d>Math.PI)d-=2*Math.PI; while(d<=-Math.PI)d+=2*Math.PI;
+    const sign = d>0 ? -1 : 1;               // travel the major arc (through loop)
+    // ordered point list: ci, items..., cj
+    const order=[{fixed:ci}];
+    for(const it of items){
+      if(it.t==='b') order.push({set:it.i});
+      else { order.push({set:it.a}); order.push({set:it.b, child:it}); }
+    }
+    order.push({fixed:cj});
+    for(let p=0;p<order.length;p++){
+      const th=th0+sign*D*p;
+      const o=order[p];
+      if(o.set!==undefined){ x[o.set]=cx+r*Math.cos(th); y[o.set]=cy+r*Math.sin(th); }
+    }
+    for(const it of items) if(it.t==='p') buildStem(it.a,it.b,cx,cy);
+  }
+
+  // ---- exterior loop ----
+  const items=[]; let k=0;
+  while(k<n){
+    if(pt[k]===-1){ items.push({t:'b',i:k}); k++; }
+    else { items.push({t:'p',a:k,b:pt[k]}); k=pt[k]+1; }
+  }
+  let base=0; for(const it of items) base += (it.t==='p'?2:1);
+  let m=base+1; if(m<3)m=3;                  // +1 virtual gap = the 5'/3' opening
+  const r=S/(2*Math.sin(Math.PI/m));
+  const D=2*Math.PI/m;
+  const th0=Math.PI/2+D;                      // opening near the bottom
+  const seq=[];
+  for(const it of items){
+    if(it.t==='b') seq.push(it.i);
+    else { seq.push(it.a); seq.push(it.b); }
+  }
+  for(let p=0;p<seq.length;p++){
+    const th=th0+D*p;
+    x[seq[p]]=r*Math.cos(th); y[seq[p]]=r*Math.sin(th);
+  }
+  for(const it of items) if(it.t==='p') buildStem(it.a,it.b,0,0);
+
+  // ---- optionally reshape the free 5'/3' tails ----
+  if(tailMode && tailMode!=='natural'){
+    let cx=0,cy=0; for(let i=0;i<n;i++){cx+=x[i];cy+=y[i];} cx/=n; cy/=n;
+    // perpendicular to (fx,fy), pointing away from the structure centroid
+    const perpOut=(fx,fy,ax,ay)=>{
+      const p1x=-fy,p1y=fx, ox=ax-cx,oy=ay-cy;
+      return (p1x*ox+p1y*oy>=0)?[p1x,p1y]:[-p1x,-p1y];
+    };
+    // anchor: last placed paired base; dirBase: its inner neighbour; step: +1 trailing / -1 leading
+    const placeTail=(anchor,dirBase,count,step)=>{
+      let fx=x[anchor]-x[dirBase], fy=y[anchor]-y[dirBase];
+      const L=Math.hypot(fx,fy)||1; fx/=L; fy/=L;
+      const [px,py]=perpOut(fx,fy,x[anchor],y[anchor]);
+      for(let t=1;t<=count;t++){
+        const idx=anchor+step*t; let X,Y;
+        if(tailMode==='flatten'){ X=x[anchor]+fx*S*t;         Y=y[anchor]+fy*S*t; }
+        else if(tailMode==='perp'){ X=x[anchor]+px*S*t;       Y=y[anchor]+py*S*t; }
+        else { // 'L': one step along the helix, then a 90° turn
+          if(t===1){ X=x[anchor]+fx*S;                        Y=y[anchor]+fy*S; }
+          else     { X=x[anchor]+fx*S+px*S*(t-1);             Y=y[anchor]+fy*S+py*S*(t-1); }
+        }
+        x[idx]=X; y[idx]=Y;
+      }
+    };
+    let a=0; while(a<n && pt[a]===-1) a++;            // first paired base
+    if(a>0 && a<n-1) placeTail(a, a+1, a, -1);        // leading tail 0..a-1
+    let b=n-1; while(b>=0 && pt[b]===-1) b--;         // last paired base
+    if(b>=1 && b<n-1) placeTail(b, b-1, n-1-b, +1);   // trailing tail b+1..n-1
+  }
+
+  return {x,y};
+}
+
+/* ---------- geometry helpers ---------- */
+function centroid(){
+  let sx=0,sy=0; for(let i=0;i<M.n;i++){sx+=M.x[i];sy+=M.y[i];}
+  return {cx:sx/M.n, cy:sy/M.n};
+}
+function rotated(i,c,cosA,sinA){
+  const dx=M.x[i]-c.cx, dy=M.y[i]-c.cy;
+  return {x:c.cx+dx*cosA-dy*sinA, y:c.cy+dx*sinA+dy*cosA};
+}
+function displayCoords(){
+  const c=centroid();
+  const a=M.rot*Math.PI/180, cosA=Math.cos(a), sinA=Math.sin(a);
+  const pts=new Array(M.n);
+  for(let i=0;i<M.n;i++) pts[i]=rotated(i,c,cosA,sinA);
+  return pts;
+}
+function lum(hex){
+  const n=parseInt(hex.slice(1),16);
+  const r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  return (0.299*r+0.587*g+0.114*b)/255;
+}
+
+/* ---------- render ---------- */
+const svg=$("canvas");
+function render(){
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+  // real background rect = WYSIWYG with export, and immune to browser auto-dark-mode
+  const bg=document.createElementNS(SVGNS,"rect");
+  bg.setAttribute("x",0);bg.setAttribute("y",0);
+  bg.setAttribute("width","100%");bg.setAttribute("height","100%");
+  bg.setAttribute("fill",$("bgColor").value);
+  svg.appendChild(bg);
+  if(M.n===0) return;
+  const pts=displayCoords();
+  const g=document.createElementNS(SVGNS,"g");
+  g.setAttribute("transform",`translate(${M.panX},${M.panY}) scale(${M.zoom})`);
+  svg.appendChild(g);
+
+  const font=M.font;
+  const backColor=$("backColor").value, pairColor=$("pairColor").value;
+  const showBack=$("cBack").checked, showPair=$("cPair").checked,
+        showCircle=$("cCircle").checked, showLetter=$("cLetter").checked,
+        bold=$("cBold").checked;
+  const frameMode=$("frameMode").value, fillMode=$("fillMode").value,
+        frameColor=$("frameColor").value, fillColor=$("fillColor").value;
+  const gap=font*0.62;   // shrink pair/backbone lines so they don't touch glyphs
+  const circR=font*0.72, circW=+$("frameW").value;
+
+  function shorten(p,q,pad){
+    const dx=q.x-p.x, dy=q.y-p.y, L=Math.hypot(dx,dy)||1;
+    const ux=dx/L, uy=dy/L;
+    return [{x:p.x+ux*pad,y:p.y+uy*pad},{x:q.x-ux*pad,y:q.y-uy*pad}];
+  }
+  function line(p,q,color,w,dash){
+    const l=document.createElementNS(SVGNS,"line");
+    l.setAttribute("x1",p.x);l.setAttribute("y1",p.y);
+    l.setAttribute("x2",q.x);l.setAttribute("y2",q.y);
+    l.setAttribute("stroke",color);l.setAttribute("stroke-width",w);
+    l.setAttribute("stroke-linecap","round");
+    if(dash)l.setAttribute("stroke-dasharray",dash);
+    g.appendChild(l);
+  }
+
+  // base-pair rungs (H-bonds) — individually colorable & selectable
+  if(showPair){
+    const w=Math.max(1.4,font*0.11);
+    for(let i=0;i<M.n;i++){
+      const j=M.pt[i];
+      if(j<=i) continue;
+      const [a,b]=shorten(pts[i],pts[j],gap);
+      if(M.selBond.has(i)){                       // highlight underlay
+        const hi=document.createElementNS(SVGNS,"line");
+        hi.setAttribute("x1",a.x);hi.setAttribute("y1",a.y);
+        hi.setAttribute("x2",b.x);hi.setAttribute("y2",b.y);
+        hi.setAttribute("stroke","#ffd166");hi.setAttribute("stroke-width",w+6/M.zoom+2);
+        hi.setAttribute("stroke-linecap","round");hi.setAttribute("opacity","0.9");
+        g.appendChild(hi);
+      }
+      line(a,b,M.bondColor[i]||pairColor,w);       // visible rung
+      const hit=document.createElementNS(SVGNS,"line");   // fat invisible click target
+      hit.setAttribute("x1",a.x);hit.setAttribute("y1",a.y);
+      hit.setAttribute("x2",b.x);hit.setAttribute("y2",b.y);
+      hit.setAttribute("stroke","transparent");
+      hit.setAttribute("stroke-width",Math.max(w,font*0.5));
+      hit.setAttribute("stroke-linecap","round");
+      hit.setAttribute("class","bond-hit");hit.dataset.i=i;
+      g.appendChild(hit);
+    }
+  }
+  // backbone
+  if(showBack){
+    for(let i=0;i<M.n-1;i++){
+      const[a,b]=shorten(pts[i],pts[i+1],gap*0.92);
+      line(a,b,backColor,Math.max(1,font*0.08));
+    }
+  }
+  // bases — drawn in two layers so letters always sit ON TOP of every circle,
+  // even where neighbouring filled circles overlap.
+  const numEvery=parseInt($("numEvery").value)||0;
+  const gBack=document.createElementNS(SVGNS,"g");   // circles + click targets
+  const gFront=document.createElementNS(SVGNS,"g");  // letters, rings, numbers
+  g.appendChild(gBack); g.appendChild(gFront);
+  // layer 1: circles + invisible hit targets
+  for(let i=0;i<M.n;i++){
+    const p=pts[i], col=M.color[i];
+    if(showCircle){
+      const cEl=document.createElementNS(SVGNS,"circle");
+      cEl.setAttribute("cx",p.x);cEl.setAttribute("cy",p.y);
+      cEl.setAttribute("r",circR);
+      const bc=baseColor(M.seq[i]);
+      cEl.setAttribute("fill", fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
+      const stroke = frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
+      cEl.setAttribute("stroke",stroke);
+      if(stroke!=="none") cEl.setAttribute("stroke-width",circW);
+      gBack.appendChild(cEl);
+    }
+    const hit=document.createElementNS(SVGNS,"circle");   // transparent, keeps base clickable
+    hit.setAttribute("cx",p.x);hit.setAttribute("cy",p.y);
+    hit.setAttribute("r",Math.max(circR,font*0.6));hit.setAttribute("fill","transparent");
+    hit.setAttribute("class","base-hit"); hit.dataset.i=i;
+    gBack.appendChild(hit);
+  }
+  // layer 2: selection rings, letters, numbers (always above circles)
+  for(let i=0;i<M.n;i++){
+    const p=pts[i], col=M.color[i];
+    if(M.selected.has(i)){
+      const ring=document.createElementNS(SVGNS,"circle");
+      ring.setAttribute("cx",p.x);ring.setAttribute("cy",p.y);
+      ring.setAttribute("r",font*0.82);
+      ring.setAttribute("fill","none");
+      ring.setAttribute("stroke","#ff8c1a");ring.setAttribute("stroke-width",2/M.zoom+0.8);
+      gFront.appendChild(ring);
+    }
+    if(showLetter){
+      const t=document.createElementNS(SVGNS,"text");
+      t.setAttribute("x",p.x);t.setAttribute("y",p.y);
+      t.setAttribute("text-anchor","middle");
+      t.setAttribute("dominant-baseline","central");
+      t.setAttribute("font-family","ui-monospace,Menlo,monospace");
+      t.setAttribute("font-size",font);
+      t.setAttribute("font-weight",bold?"700":"400");
+      t.setAttribute("fill", col);
+      t.setAttribute("class","base-hit"); t.dataset.i=i;
+      t.textContent=M.seq[i];
+      gFront.appendChild(t);
+    }
+    if(numEvery>0 && ((i+1)%numEvery===0 || i===0)){
+      const nlab=document.createElementNS(SVGNS,"text");
+      nlab.setAttribute("x",p.x);nlab.setAttribute("y",p.y-font*0.95);
+      nlab.setAttribute("text-anchor","middle");
+      nlab.setAttribute("font-size",font*0.5);
+      nlab.setAttribute("fill","#8a93a3");
+      nlab.setAttribute("font-family","ui-monospace,monospace");
+      nlab.textContent=(i+1);
+      gFront.appendChild(nlab);
+    }
+  }
+  $("badge").textContent=`${M.n} nt · ${Math.round(M.zoom*100)}%`;
+  updateExportInfo();
+}
+
+/* ---------- fit ---------- */
+function fit(){
+  if(M.n===0) return;
+  const w=svg.clientWidth, h=svg.clientHeight;
+  if(w<2||h<2){ requestAnimationFrame(fit); return; }   // canvas not sized yet
+  const pts=displayCoords();
+  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+  for(const p of pts){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
+    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
+  const pad=M.font*2.2;
+  minx-=pad;miny-=pad;maxx+=pad;maxy+=pad;
+  const zx=w/(maxx-minx), zy=h/(maxy-miny);
+  M.zoom=Math.max(0.05,Math.min(zx,zy));
+  M.panX=(w-(maxx-minx)*M.zoom)/2 - minx*M.zoom;
+  M.panY=(h-(maxy-miny)*M.zoom)/2 - miny*M.zoom;
+  render();
+}
+
+/* export pixel dimensions at current PNG scale */
+function contentSize(){
+  const pts=displayCoords();
+  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+  for(const p of pts){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
+    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
+  const pad=M.font*2.2;
+  return {W:(maxx-minx)+2*pad, H:(maxy-miny)+2*pad};
+}
+function updateExportInfo(){
+  if(M.n===0){ $("pngDims").textContent="—"; return; }
+  const {W,H}=contentSize(); const s=+$("pngScale").value||1;
+  $("pngDims").textContent=`×${s} · ${Math.round(W*s)}×${Math.round(H*s)} px`;
+}
+
+/* ---------- (re)build from inputs ---------- */
+function build(){
+  $("err").textContent="";
+  let parsed;
+  try{ parsed=parseStructure($("seq").value,$("dot").value); }
+  catch(e){ $("err").textContent="⚠ "+e; return; }
+  M.seq=parsed.seq; M.n=parsed.n; M.pt=parsed.pt; M.pkPairs=parsed.pk;
+  const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
+  M.x=lay.x; M.y=lay.y;
+  M.color=new Array(M.n);
+  M.selected.clear(); M.selBond.clear(); M.bondColor={};
+  applyPalette();      // default coloring
+  updateSelInfo(); updateBondInfo();
+  fit();
+}
+
+/* relayout keeping colors/selection (flatten toggle) */
+function relayout(){
+  if(M.n===0) return;
+  const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
+  M.x=lay.x; M.y=lay.y;
+  render();
+}
+
+/* ---------- coloring ---------- */
+function applyPalette(){
+  for(const id of ['A','U','T','G','C']) M.palette[id]=document.querySelector(`input[data-id=${id}]`).value;
+  for(let i=0;i<M.n;i++){
+    const b=M.seq[i];
+    M.color[i]=M.palette[b] || "#c8cdd6";
+  }
+  render();
+}
+function monochrome(){ const c=$("monoColor").value; for(let i=0;i<M.n;i++) M.color[i]=c; render(); }
+function baseColor(ch){ return M.palette[ch] || "#c8cdd6"; }   // identity palette (independent of letter color)
+
+/* ---------- selection ---------- */
+function updateSelInfo(){
+  const s=M.selected;
+  $("selInfo").textContent = s.size? `${s.size} selected` : "none selected";
+}
+function updateBondInfo(){
+  $("bondInfo").textContent = M.selBond.size? `${M.selBond.size} bond(s) selected` : "none selected";
+}
+
+/* ---------- interaction: pan / zoom / select ---------- */
+let dragging=false, moved=false, lastX=0,lastY=0;
+svg.addEventListener("mousedown",e=>{
+  if(e.target.closest(".base-hit")||e.target.closest(".bond-hit")) return;  // click handler manages selection
+  dragging=true; moved=false; lastX=e.clientX; lastY=e.clientY;
+  svg.classList.add("panning");
+});
+window.addEventListener("mousemove",e=>{
+  if(!dragging) return;
+  moved=true;
+  M.panX+=e.clientX-lastX; M.panY+=e.clientY-lastY;
+  lastX=e.clientX; lastY=e.clientY; render();
+});
+window.addEventListener("mouseup",e=>{
+  if(dragging && !moved && !e.target.closest(".base-hit") && !e.target.closest(".bond-hit")){
+    M.selected.clear(); M.selBond.clear(); updateSelInfo(); updateBondInfo(); render();
+  }
+  dragging=false; svg.classList.remove("panning");
+});
+svg.addEventListener("click",e=>{
+  const base=e.target.closest(".base-hit");
+  if(base){
+    const i=parseInt(base.dataset.i);
+    if(e.shiftKey){ M.selected.has(i)?M.selected.delete(i):M.selected.add(i); }
+    else { const only=M.selected.size===1&&M.selected.has(i); M.selected.clear(); if(!only)M.selected.add(i); }
+    updateSelInfo(); render(); return;
+  }
+  const bond=e.target.closest(".bond-hit");
+  if(bond){
+    const i=parseInt(bond.dataset.i);
+    if(e.shiftKey){ M.selBond.has(i)?M.selBond.delete(i):M.selBond.add(i); }
+    else { const only=M.selBond.size===1&&M.selBond.has(i); M.selBond.clear(); if(!only)M.selBond.add(i); }
+    updateBondInfo(); render();
+  }
+});
+svg.addEventListener("wheel",e=>{
+  e.preventDefault();
+  const rect=svg.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  const factor=Math.exp(-e.deltaY*0.0015);
+  const nz=Math.max(0.05,Math.min(30,M.zoom*factor));
+  // zoom about cursor
+  M.panX=mx-(mx-M.panX)*(nz/M.zoom);
+  M.panY=my-(my-M.panY)*(nz/M.zoom);
+  M.zoom=nz; render();
+},{passive:false});
+
+/* ---------- export ---------- */
+function buildExportSVG(){
+  const pts=displayCoords();
+  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+  for(const p of pts){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
+    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
+  const pad=M.font*2.2; minx-=pad;miny-=pad;maxx+=pad;maxy+=pad;
+  const W=maxx-minx, H=maxy-miny;
+  const font=M.font;
+  const backColor=$("backColor").value, pairColor=$("pairColor").value;
+  const showBack=$("cBack").checked, showPair=$("cPair").checked,
+        showCircle=$("cCircle").checked, showLetter=$("cLetter").checked,
+        bold=$("cBold").checked, transparent=$("cTransparent").checked;
+  const frameMode=$("frameMode").value, fillMode=$("fillMode").value,
+        frameColor=$("frameColor").value, fillColor=$("fillColor").value;
+  const circR=font*0.72, circW=+$("frameW").value;
+  const numEvery=parseInt($("numEvery").value)||0;
+  const gap=font*0.62;
+  const S=[];
+  S.push(`<svg xmlns="${SVGNS}" viewBox="${minx} ${miny} ${W} ${H}" width="${W}" height="${H}">`);
+  if(!transparent)
+    S.push(`<rect x="${minx}" y="${miny}" width="${W}" height="${H}" fill="${$("bgColor").value}"/>`);
+  const seg=(p,q,pad)=>{const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
+    return [p.x+ux*pad,p.y+uy*pad,q.x-ux*pad,q.y-uy*pad];};
+  if(showPair) for(let i=0;i<M.n;i++){const j=M.pt[i]; if(j>i){
+    const[x1,y1,x2,y2]=seg(pts[i],pts[j],gap);
+    S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${M.bondColor[i]||pairColor}" stroke-width="${Math.max(1.4,font*0.11)}" stroke-linecap="round"/>`);}}
+  if(showBack) for(let i=0;i<M.n-1;i++){const[x1,y1,x2,y2]=seg(pts[i],pts[i+1],gap*0.92);
+    S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${backColor}" stroke-width="${Math.max(1,font*0.08)}" stroke-linecap="round"/>`);}
+  // layer 1: all circles first
+  if(showCircle) for(let i=0;i<M.n;i++){const p=pts[i],bc=baseColor(M.seq[i]);
+    const fillC = fillMode==='none'?"none":(fillMode==='base'?bc:fillColor);
+    const strokeC = frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
+    const sw = strokeC!=="none"?` stroke="${strokeC}" stroke-width="${circW}"`:"";
+    S.push(`<circle cx="${p.x}" cy="${p.y}" r="${circR}" fill="${fillC}"${sw}/>`);
+  }
+  // layer 2: numbers + letters always on top
+  for(let i=0;i<M.n;i++){const p=pts[i],col=M.color[i];
+    if(numEvery>0 && ((i+1)%numEvery===0||i===0))
+      S.push(`<text x="${p.x}" y="${p.y-font*0.95}" text-anchor="middle" font-size="${font*0.5}" fill="#8a93a3" font-family="ui-monospace,monospace">${i+1}</text>`);
+    if(showLetter)
+      S.push(`<text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace,Menlo,monospace" font-size="${font}" font-weight="${bold?700:400}" fill="${col}">${M.seq[i]}</text>`);
+  }
+  S.push(`</svg>`);
+  return {svg:S.join("\n"),W,H};
+}
+function download(name,blob){
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+$("expSvg").onclick=()=>{ if(!M.n)return;
+  download("aptarender.svg",new Blob([buildExportSVG().svg],{type:"image/svg+xml"})); };
+$("expPng").onclick=()=>{ if(!M.n)return;
+  const {svg:str,W,H}=buildExportSVG();
+  const img=new Image();
+  const url=URL.createObjectURL(new Blob([str],{type:"image/svg+xml"}));
+  img.onload=()=>{
+    const sc=+$("pngScale").value||2, cv=document.createElement("canvas");
+    cv.width=Math.round(W*sc); cv.height=Math.round(H*sc);
+    const ctx=cv.getContext("2d"); ctx.scale(sc,sc); ctx.drawImage(img,0,0);
+    cv.toBlob(b=>{download("aptarender.png",b); URL.revokeObjectURL(url);});
+  };
+  img.src=url;
+};
+
+/* ---------- wire up controls ---------- */
+$("render").onclick=build;
+$("font").oninput=e=>{M.font=+e.target.value; $("fontVal").textContent=M.font+" px"; render();};
+$("rot").oninput=e=>{M.rot=+e.target.value; $("rotVal").textContent=M.rot+"°"; render();};
+$("reset0").onclick=()=>{M.rot=0;$("rot").value=0;$("rotVal").textContent="0°";render();};
+$("fit").onclick=fit;
+$("applyId").onclick=applyPalette;
+$("mono").onclick=monochrome;
+$("applySel").onclick=()=>{const c=$("selColor").value; M.selected.forEach(i=>M.color[i]=c); render();};
+$("selAll").onclick=()=>{M.selected.clear();for(let i=0;i<M.n;i++)M.selected.add(i);updateSelInfo();render();};
+$("selNone").onclick=()=>{M.selected.clear();updateSelInfo();render();};
+// H-bonds
+$("applyBond").onclick=()=>{const c=$("bondColor").value; M.selBond.forEach(i=>M.bondColor[i]=c); render();};
+$("bondAll").onclick=()=>{M.selBond.clear();for(let i=0;i<M.n;i++)if(M.pt[i]>i)M.selBond.add(i);updateBondInfo();render();};
+$("bondReset").onclick=()=>{M.bondColor={};M.selBond.clear();updateBondInfo();render();};
+// toggles that only re-render
+["cCircle","cBack","cPair","cLetter","cBold","frameMode","fillMode"].forEach(id=>$(id).onchange=render);
+$("tailMode").onchange=relayout;
+$("numEvery").oninput=render;
+$("frameColor").oninput=render; $("fillColor").oninput=render;
+$("frameW").oninput=e=>{$("frameWVal").textContent=e.target.value+" px"; render();};
+$("monoColor").oninput=()=>{};
+$("backColor").oninput=render; $("pairColor").oninput=render;
+$("pngScale").oninput=updateExportInfo;
+$("bgColor").oninput=e=>{$("stage").style.background=e.target.value; render();};
+document.querySelectorAll("input[data-id]").forEach(inp=>inp.oninput=()=>{ M.palette[inp.dataset.id]=inp.value; render(); });
+
+/* examples */
+$("ex1").onclick=()=>{                 // simple hairpin with a bulge
+  $("seq").value="GGGCAGCUUCGGCUGCCCAAAA";
+  $("dot").value="(((((((...))))))).....";
+  build();
+};
+$("ex2").onclick=()=>{                 // three-way multiloop
+  $("seq").value="GGGGGGAAACCCGGGAAACCCGGGAAACCCCCC";
+  $("dot").value="((((((...)))(((...)))(((...))))))";
+  build();
+};
+
+/* initial */
+window.addEventListener("resize",()=>{ if(M.n) render(); });
+$("stage").style.background=$("bgColor").value;
+$("ex1").click();
+</script>
+</body>
+</html>
