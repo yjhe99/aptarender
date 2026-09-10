@@ -82,9 +82,9 @@
   <div class="grp">
     <h2>Input</h2>
     <label>Sequence (A/U/T/G/C)</label>
-    <textarea id="seq" rows="3" spellcheck="false"></textarea>
+    <textarea id="seq" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
     <label>Dot-bracket structure</label>
-    <textarea id="dot" rows="3" spellcheck="false"></textarea>
+    <textarea id="dot" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
     <div class="row" style="margin-top:9px">
       <button class="primary" id="render">Render</button>
       <button class="mini" id="ex1">Hairpin</button>
@@ -128,12 +128,20 @@
     <h2>Selected bases</h2>
     <div class="hint" style="margin-top:0">Click a base to select. Shift-click to add.
       Click empty space to clear.</div>
-    <label>Color for selection</label>
-    <input type="color" id="selColor" value="#ffd166">
+    <label>Letter color</label>
+    <div class="row">
+      <input type="color" id="selColor" value="#ffd166">
+      <button class="mini" id="applySel">Apply</button>
+    </div>
+    <label>Circle fill color</label>
+    <div class="row">
+      <input type="color" id="selCircleColor" value="#ffd166">
+      <button class="mini" id="applySelCircle">Apply</button>
+    </div>
     <div class="row" style="margin-top:8px">
-      <button class="mini" id="applySel">Apply to selection</button>
       <button class="mini" id="selAll">Select all</button>
       <button class="mini" id="selNone">Clear</button>
+      <button class="mini" id="resetCircle">Reset fills</button>
     </div>
     <div class="hint" id="selInfo">none selected</div>
   </div>
@@ -243,7 +251,8 @@ const M = {
   pt:[],          // nested () pair table, -1 if unpaired
   pkPairs:[],     // [ [i,j], ... ] pseudoknot pairs
   x:[], y:[],     // model coords (px units)
-  color:[],       // per-base text/fill color
+  color:[],       // per-base letter color
+  circleColor:{}, // per-base circle-fill override, keyed by index; falls back to fill mode
   bondColor:{},   // per-H-bond color, keyed by lower base index; falls back to global
   selected:new Set(),
   selBond:new Set(),
@@ -507,7 +516,8 @@ function render(){
       cEl.setAttribute("cx",p.x);cEl.setAttribute("cy",p.y);
       cEl.setAttribute("r",circR);
       const bc=baseColor(M.seq[i]);
-      cEl.setAttribute("fill", fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
+      const fillC = M.circleColor[i] || (fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
+      cEl.setAttribute("fill", fillC);
       const stroke = frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
       cEl.setAttribute("stroke",stroke);
       if(stroke!=="none") cEl.setAttribute("stroke-width",circW);
@@ -592,8 +602,13 @@ function updateExportInfo(){
 }
 
 /* ---------- (re)build from inputs ---------- */
+function saveInput(){                     // persist the user's own input across reloads
+  try{ localStorage.setItem("aptarender_seq",$("seq").value);
+       localStorage.setItem("aptarender_dot",$("dot").value); }catch(e){}
+}
 function build(){
   $("err").textContent="";
+  saveInput();
   let parsed;
   try{ parsed=parseStructure($("seq").value,$("dot").value); }
   catch(e){ $("err").textContent="⚠ "+e; return; }
@@ -601,7 +616,7 @@ function build(){
   const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
   M.x=lay.x; M.y=lay.y;
   M.color=new Array(M.n);
-  M.selected.clear(); M.selBond.clear(); M.bondColor={};
+  M.selected.clear(); M.selBond.clear(); M.bondColor={}; M.circleColor={};
   applyPalette();      // default coloring
   updateSelInfo(); updateBondInfo();
   fit();
@@ -714,7 +729,7 @@ function buildExportSVG(){
     S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${backColor}" stroke-width="${Math.max(1,font*0.08)}" stroke-linecap="round"/>`);}
   // layer 1: all circles first
   if(showCircle) for(let i=0;i<M.n;i++){const p=pts[i],bc=baseColor(M.seq[i]);
-    const fillC = fillMode==='none'?"none":(fillMode==='base'?bc:fillColor);
+    const fillC = M.circleColor[i] || (fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
     const strokeC = frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
     const sw = strokeC!=="none"?` stroke="${strokeC}" stroke-width="${circW}"`:"";
     S.push(`<circle cx="${p.x}" cy="${p.y}" r="${circR}" fill="${fillC}"${sw}/>`);
@@ -751,6 +766,7 @@ $("expPng").onclick=()=>{ if(!M.n)return;
 
 /* ---------- wire up controls ---------- */
 $("render").onclick=build;
+$("seq").oninput=saveInput; $("dot").oninput=saveInput;
 $("font").oninput=e=>{M.font=+e.target.value; $("fontVal").textContent=M.font+" px"; render();};
 $("rot").oninput=e=>{M.rot=+e.target.value; $("rotVal").textContent=M.rot+"°"; render();};
 $("reset0").onclick=()=>{M.rot=0;$("rot").value=0;$("rotVal").textContent="0°";render();};
@@ -758,6 +774,9 @@ $("fit").onclick=fit;
 $("applyId").onclick=applyPalette;
 $("mono").onclick=monochrome;
 $("applySel").onclick=()=>{const c=$("selColor").value; M.selected.forEach(i=>M.color[i]=c); render();};
+$("applySelCircle").onclick=()=>{const c=$("selCircleColor").value; M.selected.forEach(i=>M.circleColor[i]=c); render();};
+$("resetCircle").onclick=()=>{M.circleColor={}; render();};
+$("selCircleColor").oninput=()=>{};
 $("selAll").onclick=()=>{M.selected.clear();for(let i=0;i<M.n;i++)M.selected.add(i);updateSelInfo();render();};
 $("selNone").onclick=()=>{M.selected.clear();updateSelInfo();render();};
 // H-bonds
@@ -791,7 +810,12 @@ $("ex2").onclick=()=>{                 // three-way multiloop
 /* initial */
 window.addEventListener("resize",()=>{ if(M.n) render(); });
 $("stage").style.background=$("bgColor").value;
-$("ex1").click();
+(function(){                              // restore saved input, else load the demo
+  let s=null,d=null;
+  try{ s=localStorage.getItem("aptarender_seq"); d=localStorage.getItem("aptarender_dot"); }catch(e){}
+  if(s && d && s.trim()){ $("seq").value=s; $("dot").value=d; build(); }
+  else { $("ex1").click(); }
+})();
 </script>
 </body>
 </html>
