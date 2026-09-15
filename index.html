@@ -87,6 +87,7 @@
     <textarea id="dot" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
     <div class="row" style="margin-top:9px">
       <button class="primary" id="render">Render</button>
+      <button class="mini" id="clear">Clear</button>
       <button class="mini" id="ex1">Hairpin</button>
       <button class="mini" id="ex2">Multiloop</button>
     </div>
@@ -767,6 +768,14 @@ $("expPng").onclick=()=>{ if(!M.n)return;
 /* ---------- wire up controls ---------- */
 $("render").onclick=build;
 $("seq").oninput=saveInput; $("dot").oninput=saveInput;
+$("clear").onclick=()=>{                  // wipe input + saved copy, blank the canvas
+  $("seq").value=""; $("dot").value=""; $("err").textContent="";
+  try{ localStorage.removeItem("aptarender_seq"); localStorage.removeItem("aptarender_dot"); }catch(e){}
+  M.n=0; M.selected.clear(); M.selBond.clear(); M.bondColor={}; M.circleColor={};
+  updateSelInfo(); updateBondInfo();
+  $("badge").textContent="—"; render(); updateExportInfo();
+  $("seq").focus();
+};
 $("font").oninput=e=>{M.font=+e.target.value; $("fontVal").textContent=M.font+" px"; render();};
 $("rot").oninput=e=>{M.rot=+e.target.value; $("rotVal").textContent=M.rot+"°"; render();};
 $("reset0").onclick=()=>{M.rot=0;$("rot").value=0;$("rotVal").textContent="0°";render();};
