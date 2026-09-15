@@ -376,6 +376,10 @@ function computeLayout(n, pt, S, tailMode){
 
   // ---- optionally reshape the free 5'/3' tails ----
   if(tailMode && tailMode!=='natural'){
+    if(!pt.some(v=>v!==-1)){                          // no stem at all → linearize the whole strand
+      for(let i=0;i<n;i++){ x[i]=i*S; y[i]=0; }
+      return {x,y};
+    }
     let cx=0,cy=0; for(let i=0;i<n;i++){cx+=x[i];cy+=y[i];} cx/=n; cy/=n;
     // perpendicular to (fx,fy), pointing away from the structure centroid
     const perpOut=(fx,fy,ax,ay)=>{
