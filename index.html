@@ -72,6 +72,18 @@
   a.link{color:var(--accent); cursor:pointer; text-decoration:underline; font-size:11px}
   #contact .contact-by{margin:0; font-size:12px; color:var(--text)}
   #contact a.link{display:inline-block; margin-top:6px; font-size:12px; font-weight:600}
+  #pantop{position:sticky; top:0; z-index:6; background:var(--panel);
+    margin:0 -14px 10px; padding:4px 14px 0; border-bottom:1px solid var(--line)}
+  #tabs{display:flex; flex-wrap:wrap; gap:4px; padding-bottom:8px}
+  #tabs .tab{flex:1 1 0; min-width:0; padding:6px 3px; font-size:10.5px;
+    background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+    color:var(--muted); cursor:pointer; text-align:center; white-space:nowrap}
+  #tabs .tab:hover{border-color:var(--accent)}
+  #tabs .tab.active{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600}
+  #selbar{display:flex; align-items:center; gap:8px; padding:0 0 8px}
+  #selbar #selInfo{flex:1; font-size:11px; color:var(--muted)}
+  .pane{display:none}
+  .pane.active{display:block}
 </style>
 </head>
 <body>
@@ -79,161 +91,200 @@
   <h1>AptaRender</h1>
   <p class="sub">Dot-bracket → editable 2D art. No prediction — you supply the structure.</p>
 
-  <div class="grp">
-    <h2>Input</h2>
-    <label>Sequence (A/U/T/G/C)</label>
-    <textarea id="seq" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
-    <label>Dot-bracket structure</label>
-    <textarea id="dot" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
-    <div class="row" style="margin-top:9px">
-      <button class="primary" id="render">Render</button>
-      <button class="mini" id="clear">Clear</button>
-      <button class="mini" id="ex1">Hairpin</button>
-      <button class="mini" id="ex2">Multiloop</button>
-    </div>
-    <div id="err"></div>
-    <div class="hint">Use nested <code>( )</code> and <code>.</code> for the structure.
-      Drag the background to pan, scroll to zoom.</div>
-  </div>
-
-  <div class="grp">
-    <h2>Type &amp; size</h2>
-    <div class="flexlabel"><label>Font size</label><span class="val" id="fontVal">18 px</span></div>
-    <input type="range" id="font" min="8" max="60" value="18">
-    <div class="flexlabel"><label>Rotate structure (text stays upright)</label><span class="val" id="rotVal">0°</span></div>
-    <input type="range" id="rot" min="0" max="360" value="0">
-    <div class="row" style="margin-top:8px">
-      <button class="mini" id="fit">Fit to view</button>
-      <button class="mini" id="reset0">Rotation 0°</button>
-    </div>
-  </div>
-
-  <div class="grp">
-    <h2>Color by base</h2>
-    <div class="idrow"><span>A</span><input type="color" data-id="A" value="#4c9f70"></div>
-    <div class="idrow"><span>U</span><input type="color" data-id="U" value="#e15554"></div>
-    <div class="idrow"><span>T</span><input type="color" data-id="T" value="#e1bc29"></div>
-    <div class="idrow"><span>G</span><input type="color" data-id="G" value="#7768ae"></div>
-    <div class="idrow"><span>C</span><input type="color" data-id="C" value="#3b8ea5"></div>
-    <div class="row" style="margin-top:8px">
-      <button class="mini" id="applyId">Apply palette</button>
-    </div>
-    <label>Monochrome letter color</label>
-    <div class="row">
-      <input type="color" id="monoColor" value="#000000">
-      <button class="mini" id="mono">Apply monochrome</button>
-    </div>
-  </div>
-
-  <div class="grp">
-    <h2>Selected bases</h2>
-    <div class="hint" style="margin-top:0">Click a base to select. Shift-click to add.
-      Click empty space to clear.</div>
-    <label>Letter color</label>
-    <div class="row">
-      <input type="color" id="selColor" value="#ffd166">
-      <button class="mini" id="applySel">Apply</button>
-    </div>
-    <label>Circle fill color</label>
-    <div class="row">
-      <input type="color" id="selCircleColor" value="#ffd166">
-      <button class="mini" id="applySelCircle">Apply</button>
-    </div>
-    <div class="row" style="margin-top:8px">
+  <div id="pantop">
+    <nav id="tabs">
+      <button class="tab active" data-tab="input">Input</button>
+      <button class="tab" data-tab="layout">Layout</button>
+      <button class="tab" data-tab="letters">Letters</button>
+      <button class="tab" data-tab="circles">Circles</button>
+      <button class="tab" data-tab="lines">Lines</button>
+      <button class="tab" data-tab="export">Export</button>
+    </nav>
+    <div id="selbar">
+      <span id="selInfo">none selected</span>
       <button class="mini" id="selAll">Select all</button>
       <button class="mini" id="selNone">Clear</button>
-      <button class="mini" id="resetCircle">Reset fills</button>
     </div>
-    <div class="hint" id="selInfo">none selected</div>
   </div>
 
-  <div class="grp">
-    <h2>H-bonds</h2>
-    <div class="hint" style="margin-top:0">Click a base-pair rung to select it. Shift-click to add.
-      Unselected rungs use the global rung color.</div>
-    <label>Color for selected bonds</label>
-    <input type="color" id="bondColor" value="#e15554">
-    <div class="row" style="margin-top:8px">
-      <button class="mini" id="applyBond">Apply to selection</button>
-      <button class="mini" id="bondAll">Select all</button>
-      <button class="mini" id="bondReset">Reset colors</button>
+  <!-- ============ INPUT ============ -->
+  <section class="pane active" data-pane="input">
+    <div class="grp">
+      <h2>Sequence &amp; structure</h2>
+      <label>Sequence (A/U/T/G/C)</label>
+      <textarea id="seq" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+      <label>Dot-bracket structure</label>
+      <textarea id="dot" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+      <div class="row" style="margin-top:9px">
+        <button class="primary" id="render">Render</button>
+        <button class="mini" id="clear">Clear</button>
+        <button class="mini" id="ex1">Hairpin</button>
+        <button class="mini" id="ex2">Multiloop</button>
+      </div>
+      <div id="err"></div>
+      <div class="hint">Use nested <code>( )</code> and <code>.</code> for the structure.
+        Drag the background to pan, scroll to zoom.</div>
     </div>
-    <div class="hint" id="bondInfo">none selected</div>
-  </div>
+  </section>
 
-  <div class="grp">
-    <h2>Bases</h2>
-    <label class="chk"><input type="checkbox" id="cLetter" checked> Show base letters</label>
-    <label class="chk"><input type="checkbox" id="cBold"> Bold letters</label>
-    <label class="chk"><input type="checkbox" id="cCircle"> Base circles</label>
-    <label>Circle frame</label>
-    <div class="split">
-      <select id="frameMode">
-        <option value="custom">Custom color</option>
-        <option value="base">By base color</option>
-        <option value="none">None</option>
+  <!-- ============ LAYOUT ============ -->
+  <section class="pane" data-pane="layout">
+    <div class="grp">
+      <h2>Orientation</h2>
+      <div class="flexlabel"><label>Rotate structure (text stays upright)</label><span class="val" id="rotVal">0°</span></div>
+      <input type="range" id="rot" min="0" max="360" value="0">
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="fit">Fit to view</button>
+        <button class="mini" id="reset0">Rotation 0°</button>
+      </div>
+    </div>
+    <div class="grp">
+      <h2>Free tails</h2>
+      <label>Free 5′/3′ tails (unpaired ends)</label>
+      <select id="tailMode">
+        <option value="natural">Natural (curved)</option>
+        <option value="flatten">Flatten (straight)</option>
+        <option value="L">L-shape (90° corner)</option>
+        <option value="perp">Perpendicular (90° out)</option>
       </select>
-      <input type="color" id="frameColor" value="#000000" style="flex:0 0 46px">
     </div>
-    <div class="flexlabel"><label>Frame thickness</label><span class="val" id="frameWVal">2 px</span></div>
-    <input type="range" id="frameW" min="0.5" max="12" step="0.5" value="2">
-    <label>Circle fill</label>
-    <div class="split">
-      <select id="fillMode">
-        <option value="custom" selected>Custom color</option>
-        <option value="none">None</option>
-        <option value="base">By base color</option>
-      </select>
-      <input type="color" id="fillColor" value="#ffffff" style="flex:0 0 46px">
-    </div>
-  </div>
+  </section>
 
-  <div class="grp">
-    <h2>Layout &amp; lines</h2>
-    <label class="chk"><input type="checkbox" id="cBack" checked> Backbone line</label>
-    <label class="chk"><input type="checkbox" id="cPair" checked> Base-pair rungs</label>
-    <label>Free 5′/3′ tails</label>
-    <select id="tailMode">
-      <option value="natural">Natural (curved)</option>
-      <option value="flatten">Flatten (straight)</option>
-      <option value="L">L-shape (90° corner)</option>
-      <option value="perp">Perpendicular (90° out)</option>
-    </select>
-    <label class="flexlabel"><span>Backbone / rung color</span></label>
-    <div class="split">
-      <input type="color" id="backColor" value="#4b5563">
-      <input type="color" id="pairColor" value="#6b7280">
+  <!-- ============ LETTERS ============ -->
+  <section class="pane" data-pane="letters">
+    <div class="grp">
+      <h2>Type</h2>
+      <div class="flexlabel"><label>Font size</label><span class="val" id="fontVal">18 px</span></div>
+      <input type="range" id="font" min="8" max="60" value="18">
+      <label class="chk"><input type="checkbox" id="cLetter" checked> Show base letters</label>
+      <label class="chk"><input type="checkbox" id="cBold"> Bold letters</label>
     </div>
-    <div class="idrow" style="margin-top:8px">
-      <span style="width:auto;font-weight:400;color:var(--muted);font-size:11px">Number every</span>
-      <input type="number" id="numEvery" min="0" value="0"> <span style="width:auto;color:var(--muted);font-size:11px">nt (0=off)</span>
+    <div class="grp">
+      <h2>Color by base</h2>
+      <div class="idrow"><span>A</span><input type="color" data-id="A" value="#4c9f70"></div>
+      <div class="idrow"><span>U</span><input type="color" data-id="U" value="#e15554"></div>
+      <div class="idrow"><span>T</span><input type="color" data-id="T" value="#e1bc29"></div>
+      <div class="idrow"><span>G</span><input type="color" data-id="G" value="#7768ae"></div>
+      <div class="idrow"><span>C</span><input type="color" data-id="C" value="#3b8ea5"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="applyId">Apply palette</button>
+      </div>
+      <label>Monochrome letter color</label>
+      <div class="row">
+        <input type="color" id="monoColor" value="#000000">
+        <button class="mini" id="mono">Apply monochrome</button>
+      </div>
     </div>
-  </div>
-
-  <div class="grp">
-    <h2>Canvas</h2>
-    <label>Background</label>
-    <input type="color" id="bgColor" value="#ffffff">
-    <label class="chk" style="margin-top:8px"><input type="checkbox" id="cTransparent"> Transparent background on export</label>
-  </div>
-
-  <div class="grp tight">
-    <h2>Export</h2>
-    <div class="flexlabel"><label>PNG scale</label><span class="val" id="pngDims">—</span></div>
-    <input type="range" id="pngScale" min="1" max="12" step="1" value="2">
-    <div class="row" style="margin-top:8px">
-      <button class="mini" id="expSvg">SVG</button>
-      <button class="mini" id="expPng">PNG</button>
+    <div class="grp">
+      <h2>Selected letters</h2>
+      <div class="hint" style="margin-top:0">Click a base on the canvas to select it. Shift-click to add.</div>
+      <label>Letter color for selection</label>
+      <div class="row">
+        <input type="color" id="selColor" value="#ffd166">
+        <button class="mini" id="applySel">Apply</button>
+      </div>
     </div>
-    <div class="hint">SVG stays fully editable in Illustrator/Inkscape — every base is its own text element. PNG dimensions shown above.</div>
-  </div>
+  </section>
 
-  <div class="grp tight" id="contact">
-    <h2>Contact &amp; feedback</h2>
-    <p class="contact-by">Built by <strong>Janet He</strong> with Claude</p>
-    <p class="hint" style="margin-top:2px">Still under development — feedback &amp; suggestions are very welcome.</p>
-    <a class="link" href="mailto:yjhe@utexas.edu?subject=AptaRender%20feedback">yjhe@utexas.edu</a>
-  </div>
+  <!-- ============ CIRCLES ============ -->
+  <section class="pane" data-pane="circles">
+    <div class="grp">
+      <h2>Base circles</h2>
+      <label class="chk"><input type="checkbox" id="cCircle"> Show base circles</label>
+      <label>Circle frame</label>
+      <div class="split">
+        <select id="frameMode">
+          <option value="custom">Custom color</option>
+          <option value="base">By base color</option>
+          <option value="none">None</option>
+        </select>
+        <input type="color" id="frameColor" value="#000000" style="flex:0 0 46px">
+      </div>
+      <div class="flexlabel"><label>Frame thickness</label><span class="val" id="frameWVal">2 px</span></div>
+      <input type="range" id="frameW" min="0.5" max="12" step="0.5" value="2">
+      <label>Circle fill</label>
+      <div class="split">
+        <select id="fillMode">
+          <option value="custom" selected>Custom color</option>
+          <option value="none">None</option>
+          <option value="base">By base color</option>
+        </select>
+        <input type="color" id="fillColor" value="#ffffff" style="flex:0 0 46px">
+      </div>
+    </div>
+    <div class="grp">
+      <h2>Selected circle fill</h2>
+      <div class="hint" style="margin-top:0">Click a base on the canvas to select it, then apply a fill.</div>
+      <label>Circle fill for selection</label>
+      <div class="row">
+        <input type="color" id="selCircleColor" value="#ffd166">
+        <button class="mini" id="applySelCircle">Apply</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="resetCircle">Reset all fills</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ LINES ============ -->
+  <section class="pane" data-pane="lines">
+    <div class="grp">
+      <h2>Backbone &amp; pair rungs</h2>
+      <label class="chk"><input type="checkbox" id="cBack" checked> Backbone line</label>
+      <label class="chk"><input type="checkbox" id="cPair" checked> Base-pair rungs</label>
+      <label class="flexlabel"><span>Backbone / rung color</span></label>
+      <div class="split">
+        <input type="color" id="backColor" value="#4b5563">
+        <input type="color" id="pairColor" value="#6b7280">
+      </div>
+    </div>
+    <div class="grp">
+      <h2>H-bond colors</h2>
+      <div class="hint" style="margin-top:0">Click a base-pair rung to select it. Shift-click to add.
+        Unselected rungs use the global rung color.</div>
+      <label>Color for selected bonds</label>
+      <input type="color" id="bondColor" value="#e15554">
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="applyBond">Apply</button>
+        <button class="mini" id="bondAll">Select all</button>
+        <button class="mini" id="bondReset">Reset colors</button>
+      </div>
+      <div class="hint" id="bondInfo">none selected</div>
+    </div>
+    <div class="grp">
+      <h2>Numbering</h2>
+      <div class="idrow">
+        <span style="width:auto;font-weight:400;color:var(--muted);font-size:11px">Number every</span>
+        <input type="number" id="numEvery" min="0" value="0"> <span style="width:auto;color:var(--muted);font-size:11px">nt (0=off)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ EXPORT ============ -->
+  <section class="pane" data-pane="export">
+    <div class="grp">
+      <h2>Canvas</h2>
+      <label>Background</label>
+      <input type="color" id="bgColor" value="#ffffff">
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="cTransparent"> Transparent background on export</label>
+    </div>
+    <div class="grp">
+      <h2>Export</h2>
+      <div class="flexlabel"><label>PNG scale</label><span class="val" id="pngDims">—</span></div>
+      <input type="range" id="pngScale" min="1" max="12" step="1" value="2">
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="expSvg">SVG</button>
+        <button class="mini" id="expPng">PNG</button>
+      </div>
+      <div class="hint">SVG stays fully editable in Illustrator/Inkscape — every base is its own text element. PNG dimensions shown above.</div>
+    </div>
+    <div class="grp tight" id="contact">
+      <h2>Contact &amp; feedback</h2>
+      <p class="contact-by">Built by <strong>Janet He</strong> with Claude</p>
+      <p class="hint" style="margin-top:2px">Still under development — feedback &amp; suggestions are very welcome.</p>
+      <a class="link" href="mailto:yjhe@utexas.edu?subject=AptaRender%20feedback">yjhe@utexas.edu</a>
+    </div>
+  </section>
 </div>
 
 <div id="stage">
@@ -819,6 +870,18 @@ $("ex2").onclick=()=>{                 // three-way multiloop
   $("dot").value="((((((...)))(((...)))(((...))))))";
   build();
 };
+
+/* tabs (top navigator) */
+const SEL_TABS=new Set(['letters','circles']);   // panes where base-selection controls matter
+document.querySelectorAll('#tabs .tab').forEach(btn=>{
+  btn.onclick=()=>{
+    const tab=btn.dataset.tab;
+    document.querySelectorAll('#tabs .tab').forEach(b=>b.classList.toggle('active', b===btn));
+    document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('active', p.dataset.pane===tab));
+    $("selbar").style.display = SEL_TABS.has(tab) ? 'flex' : 'none';
+  };
+});
+$("selbar").style.display='none';   // hidden on the Input tab at start
 
 /* initial */
 window.addEventListener("resize",()=>{ if(M.n) render(); });

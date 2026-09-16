@@ -40,6 +40,9 @@ separates *drawing* from *prediction* so you have full control over how the figu
 
 ## Updates
 
+### 2026-09-16
+- **Reorganized the control panel** into a top navigator with six tabs — Input, Layout, Letters, Circles, Lines, Export — so related controls live together and are easy to find. A shared selection bar (used for per-base coloring) sits under the tabs.
+
 ### 2026-09-14
 - Added a **Clear** button that wipes the current input and its locally-saved copy. Note: saved input is stored only in your own browser (`localStorage`) — it is never uploaded and other visitors never see it; Clear is for tidying up your own machine (e.g. a shared computer).
 
