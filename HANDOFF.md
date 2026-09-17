@@ -30,19 +30,12 @@ python3 -m http.server 8731
 (Opening the file directly with `file://` also works for most things, but a local HTTP
 server avoids browser file-access restrictions and matches how it's deployed.)
 
-## 3. Repository & branch model — READ THIS
+## 3. Deployment & workflow
 
-- **`main`** = what is deployed live via GitHub Pages. It currently holds an **older,
-  single-panel version** on purpose (the maintainer rolled it back so public/LinkedIn
-  visitors see a stable UI). **Do not treat `main` as the current code.**
-- **`dev`** = the **current, up-to-date code** — reorganized tabbed panel + multiple
-  sequences (#2) + the L-shape tail fix. **Do all #4 work on `dev`** (or a branch off
-  `dev`). Never build on `main`.
-- Deployment happens later by merging `dev` → `main` (maintainer decides when). GitHub
-  Pages serves `main` at the root path; a first build takes ~1 min and the CDN can cache
-  the old file for a minute after.
-
-If `dev` is not on the remote when you start, ask the maintainer to push it.
+The app is a static single file served by **GitHub Pages** — there is no build step, so a
+"deploy" is just the file being published (a first build takes ~1 min, and the CDN may
+cache the previous file briefly). For a large feature like #4, create a **feature branch**
+and open a pull request rather than committing straight to the default branch.
 
 ## 4. Architecture of `index.html`
 
@@ -195,12 +188,12 @@ arrays + color arrays.
 
 ---
 
-## 8. What to hand the collaborator
-Everything needed is in the **git repo** on the **`dev`** branch:
+## 8. What's in the repo
+Everything needed is in the **git repo**:
 - `index.html` — the app (all code).
 - `README.md`, `CHANGELOG.md` — docs.
 - `HANDOFF.md` — this guide.
 
-There is **nothing outside git** to hand over: no secrets, API keys, env files, build
-config, or database — it's a static single-file app persisted only in the browser's
-`localStorage`. Just make sure the collaborator **works on `dev`, not `main`.**
+There is **nothing outside git**: no secrets, API keys, env files, build config, or
+database — it's a static single-file app persisted only in the browser's `localStorage`.
+For a large feature like #4, branch off the default branch and open a PR.
