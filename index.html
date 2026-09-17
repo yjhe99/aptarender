@@ -84,6 +84,16 @@
   #selbar #selInfo{flex:1; font-size:11px; color:var(--muted)}
   .pane{display:none}
   .pane.active{display:block}
+  #doclist{display:flex; flex-direction:column; gap:4px; max-height:200px; overflow-y:auto}
+  .docrow{display:flex; align-items:center; gap:6px; background:#0e1117; border:1px solid var(--line);
+    border-radius:6px; padding:5px 8px; cursor:pointer}
+  .docrow.active{border-color:var(--accent); background:#182338}
+  .docrow .docname{flex:1; font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .docrow .docname .emptytag{color:var(--muted); font-size:10.5px}
+  .docrow .docdel{flex:0 0 auto; background:transparent; border:none; color:var(--muted);
+    font-size:15px; line-height:1; padding:0 4px; cursor:pointer}
+  .docrow .docdel:hover{color:var(--danger)}
+  #docCount{font-weight:400; color:var(--muted); text-transform:none; letter-spacing:0; font-size:10.5px}
 </style>
 </head>
 <body>
@@ -110,7 +120,18 @@
   <!-- ============ INPUT ============ -->
   <section class="pane active" data-pane="input">
     <div class="grp">
-      <h2>Sequence &amp; structure</h2>
+      <h2>Sequences <span id="docCount"></span></h2>
+      <div id="doclist"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="addSeq">+ Add</button>
+        <button class="mini" id="importBtn">Import file…</button>
+        <input type="file" id="fastaFile" accept=".fa,.fasta,.txt,.dbn,.seq,.dot" style="display:none">
+      </div>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="uniformStyle" checked> Uniform style across all</label>
+      <div class="hint" id="docHint">Up to 20 sequences. FASTA (or seq+structure) files supported.</div>
+    </div>
+    <div class="grp">
+      <h2>Active sequence &amp; structure</h2>
       <label>Sequence (A/U/T/G/C)</label>
       <textarea id="seq" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
       <label>Dot-bracket structure</label>
@@ -441,7 +462,17 @@ function computeLayout(n, pt, S, tailMode){
     const placeTail=(anchor,dirBase,count,step)=>{
       let fx=x[anchor]-x[dirBase], fy=y[anchor]-y[dirBase];
       const L=Math.hypot(fx,fy)||1; fx/=L; fy/=L;
-      const [px,py]=perpOut(fx,fy,x[anchor],y[anchor]);
+      // 90° turn direction: toward the anchor base's own strand side (away from its base-pair
+      // partner), from the rung vector projected perpendicular to the helix axis. Stable and
+      // deterministic — avoids the centroid test's degeneracy when a tail points radially outward.
+      let px,py; const par=pt[anchor];
+      if(par!==-1){
+        let rx=x[anchor]-x[par], ry=y[anchor]-y[par];
+        const d=rx*fx+ry*fy; rx-=d*fx; ry-=d*fy;      // drop the along-axis component
+        const rl=Math.hypot(rx,ry);
+        if(rl>1e-6){ px=rx/rl; py=ry/rl; }
+      }
+      if(px===undefined) [px,py]=perpOut(fx,fy,x[anchor],y[anchor]);   // fallback
       for(let t=1;t<=count;t++){
         const idx=anchor+step*t; let X,Y;
         if(tailMode==='flatten'){ X=x[anchor]+fx*S*t;         Y=y[anchor]+fy*S*t; }
@@ -658,9 +689,9 @@ function updateExportInfo(){
 }
 
 /* ---------- (re)build from inputs ---------- */
-function saveInput(){                     // persist the user's own input across reloads
-  try{ localStorage.setItem("aptarender_seq",$("seq").value);
-       localStorage.setItem("aptarender_dot",$("dot").value); }catch(e){}
+function saveInput(){                     // sync active doc's raw text + persist
+  if(active>=0 && active<docs.length){ docs[active].seq=$("seq").value; docs[active].dot=$("dot").value; }
+  persist();
 }
 function build(){
   $("err").textContent="";
@@ -820,36 +851,174 @@ $("expPng").onclick=()=>{ if(!M.n)return;
   img.src=url;
 };
 
+/* ---------- multiple sequences ---------- */
+const LIMIT=20;
+let docs=[]; let active=-1;
+const STYLE_IDS=['font','cLetter','cBold','cCircle','frameMode','frameColor','frameW',
+  'fillMode','fillColor','cBack','cPair','tailMode','backColor','pairColor','numEvery',
+  'bgColor','cTransparent'];
+function elVal(id){ const e=$(id); return e.type==='checkbox'?e.checked:e.value; }
+function setVal(id,v){ const e=$(id); if(e.type==='checkbox') e.checked=!!v; else e.value=v; }
+function readStyle(){
+  const s={}; STYLE_IDS.forEach(id=>s[id]=elVal(id));
+  s.palette={}; document.querySelectorAll('input[data-id]').forEach(inp=>s.palette[inp.dataset.id]=inp.value);
+  return s;
+}
+function applyStyle(s){
+  if(!s) return;
+  STYLE_IDS.forEach(id=>{ if(id in s) setVal(id,s[id]); });
+  if(s.palette) document.querySelectorAll('input[data-id]').forEach(inp=>{ if(s.palette[inp.dataset.id]) inp.value=s.palette[inp.dataset.id]; });
+  M.font=+$("font").value; $("fontVal").textContent=M.font+" px";
+  $("frameWVal").textContent=$("frameW").value+" px";
+  M.palette={}; document.querySelectorAll('input[data-id]').forEach(inp=>M.palette[inp.dataset.id]=inp.value);
+  $("stage").style.background=$("bgColor").value;
+}
+function newDoc(name,seq,dot){ return {name:name||'seq', seq:seq||'', dot:dot||'', color:[], circleColor:{}, bondColor:{}, view:null, style:null}; }
+function uniform(){ return $("uniformStyle").checked; }
+function applyPaletteNoRender(){
+  for(const id of ['A','U','T','G','C']) M.palette[id]=document.querySelector(`input[data-id=${id}]`).value;
+  for(let i=0;i<M.n;i++) M.color[i]=M.palette[M.seq[i]]||"#c8cdd6";
+}
+function blankCanvas(){
+  M.n=0; M.selected.clear(); M.selBond.clear(); M.circleColor={}; M.bondColor={};
+  updateSelInfo(); updateBondInfo(); $("badge").textContent="—"; render(); updateExportInfo();
+}
+function saveActive(){
+  if(active<0||active>=docs.length) return;
+  const d=docs[active];
+  d.seq=$("seq").value; d.dot=$("dot").value;
+  d.color=(M.color&&M.color.length)?M.color.slice():[];
+  d.circleColor={...M.circleColor}; d.bondColor={...M.bondColor};
+  d.view={zoom:M.zoom,panX:M.panX,panY:M.panY,rot:M.rot};
+  d.style=readStyle();
+}
+function applyDoc(i){                     // load doc i into UI + model (does NOT save previous)
+  active=i; const d=docs[i]; $("err").textContent="";
+  $("seq").value=d.seq||""; $("dot").value=d.dot||"";
+  if(!uniform() && d.style) applyStyle(d.style);
+  if((d.seq||"").trim() && (d.dot||"").trim()){
+    let parsed;
+    try{ parsed=parseStructure(d.seq,d.dot); }
+    catch(e){ $("err").textContent="⚠ "+e; blankCanvas(); renderDocList(); return; }
+    M.seq=parsed.seq; M.n=parsed.n; M.pt=parsed.pt; M.pkPairs=parsed.pk;
+    const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
+    M.x=lay.x; M.y=lay.y; M.color=new Array(M.n);
+    M.selected.clear(); M.selBond.clear();
+    applyPaletteNoRender();
+    if(d.color && d.color.length===M.n) M.color=d.color.slice();
+    M.circleColor={...(d.circleColor||{})}; M.bondColor={...(d.bondColor||{})};
+    updateSelInfo(); updateBondInfo();
+    if(d.view){ M.zoom=d.view.zoom; M.panX=d.view.panX; M.panY=d.view.panY; M.rot=d.view.rot;
+      $("rot").value=M.rot; $("rotVal").textContent=M.rot+"°"; render(); }
+    else { M.rot=+($("rot").value||0); fit(); }
+  } else {
+    blankCanvas();
+    if((d.seq||"").trim() && !(d.dot||"").trim())
+      $("err").textContent="Add a dot-bracket structure for this sequence, then Render.";
+  }
+  renderDocList();
+}
+function switchDoc(i){ if(i===active) return; saveActive(); applyDoc(i); persist(); }
+function addDoc(seq,dot,name){
+  if(docs.length>=LIMIT){ flashLimit(); return; }
+  saveActive();
+  docs.push(newDoc(name||('seq '+(docs.length+1)), seq||'', dot||''));
+  applyDoc(docs.length-1); persist();
+}
+function deleteDoc(i){
+  saveActive(); docs.splice(i,1);
+  if(docs.length===0){ docs.push(newDoc('seq 1','','')); active=0; }
+  else { if(i<active) active--; if(active>=docs.length) active=docs.length-1; if(active<0) active=0; }
+  applyDoc(active); persist();
+}
+function renameDoc(i){
+  const v=prompt("Rename sequence:", docs[i].name||('seq '+(i+1)));
+  if(v && v.trim()){ docs[i].name=v.trim(); renderDocList(); persist(); }
+}
+function flashLimit(){ $("docHint").textContent=`Limit is ${LIMIT} sequences — delete one to add more.`;
+  setTimeout(()=>{$("docHint").textContent=defaultHint();},2600); }
+function defaultHint(){ return `${docs.length}/${LIMIT} sequences · each keeps its own structure & colors.`; }
+function renderDocList(){
+  const el=$("doclist"); el.innerHTML='';
+  docs.forEach((d,i)=>{
+    const row=document.createElement('div'); row.className='docrow'+(i===active?' active':'');
+    const nm=document.createElement('span'); nm.className='docname';
+    nm.textContent=d.name||('seq '+(i+1));
+    if(!(d.seq&&d.seq.trim())){ const t=document.createElement('span'); t.className='emptytag'; t.textContent=' · empty'; nm.appendChild(t); }
+    nm.title="Click to open · double-click to rename";
+    nm.onclick=()=>switchDoc(i); nm.ondblclick=()=>renameDoc(i);
+    const del=document.createElement('button'); del.className='docdel'; del.textContent='×'; del.title='Delete';
+    del.onclick=(ev)=>{ev.stopPropagation(); deleteDoc(i);};
+    row.appendChild(nm); row.appendChild(del); el.appendChild(row);
+  });
+  $("docCount").textContent=`(${docs.length}/${LIMIT})`;
+  $("docHint").textContent=defaultHint();
+}
+function parseFasta(text){
+  const lines=text.split(/\r?\n/); const recs=[]; let cur=null;
+  for(const raw of lines){
+    const line=raw.trim(); if(!line) continue;
+    if(line[0]==='>'){ cur={name:line.slice(1).trim()||('seq '+(recs.length+1)),seq:'',dot:''}; recs.push(cur); }
+    else { if(!cur){ cur={name:'seq '+(recs.length+1),seq:'',dot:''}; recs.push(cur); }
+      if(cur.seq && /^[-().:,\[\]{}<>]+$/.test(line)) cur.dot+=line; else cur.seq+=line.replace(/\s+/g,''); }
+  }
+  return recs.filter(r=>r.seq);
+}
+function importFasta(text){
+  const recs=parseFasta(text);
+  if(!recs.length){ $("docHint").textContent="No sequences found in that file."; return; }
+  saveActive(); const firstNew=docs.length; let added=0;
+  for(const r of recs){ if(docs.length>=LIMIT) break; docs.push(newDoc(r.name,r.seq,r.dot)); added++; }
+  if(added>0) applyDoc(firstNew);
+  persist();
+  if(recs.length>added) $("docHint").textContent=`Added ${added}; ${recs.length-added} skipped (limit ${LIMIT}).`;
+}
+function persist(){
+  try{
+    const slim=docs.map(d=>({name:d.name,seq:d.seq,dot:d.dot,color:d.color,circleColor:d.circleColor,bondColor:d.bondColor,view:d.view,style:d.style}));
+    localStorage.setItem("aptarender_docs", JSON.stringify({docs:slim,active,uniform:uniform()}));
+  }catch(e){}
+}
+function touch(){ if(active>=0){ saveActive(); persist(); } }   // capture per-doc edits
+function renderActiveFromBoxes(){          // Render button / examples
+  if(active<0){ addDoc($("seq").value,$("dot").value); return; }
+  build(); saveActive(); renderDocList(); persist();
+}
+
 /* ---------- wire up controls ---------- */
-$("render").onclick=build;
+$("render").onclick=renderActiveFromBoxes;
+$("addSeq").onclick=()=>{ addDoc('',''); $("seq").focus(); };
+$("importBtn").onclick=()=>$("fastaFile").click();
+$("fastaFile").onchange=async e=>{ const f=e.target.files[0]; if(!f) return;
+  try{ importFasta(await f.text()); }catch(err){ $("docHint").textContent="Could not read that file."; }
+  e.target.value=""; };
+$("uniformStyle").onchange=()=>{ if(!uniform()){ const s=readStyle(); docs.forEach(d=>d.style=s); } persist(); };
+window.addEventListener("beforeunload",()=>{ saveActive(); persist(); });
 $("seq").oninput=saveInput; $("dot").oninput=saveInput;
-$("clear").onclick=()=>{                  // wipe input + saved copy, blank the canvas
+$("clear").onclick=()=>{                  // blank the active sequence (keeps it in the list)
   $("seq").value=""; $("dot").value=""; $("err").textContent="";
-  try{ localStorage.removeItem("aptarender_seq"); localStorage.removeItem("aptarender_dot"); }catch(e){}
-  M.n=0; M.selected.clear(); M.selBond.clear(); M.bondColor={}; M.circleColor={};
-  updateSelInfo(); updateBondInfo();
-  $("badge").textContent="—"; render(); updateExportInfo();
-  $("seq").focus();
+  if(active>=0){ const d=docs[active]; d.seq=""; d.dot=""; d.color=[]; d.circleColor={}; d.bondColor={}; d.view=null; }
+  blankCanvas(); renderDocList(); persist(); $("seq").focus();
 };
 $("font").oninput=e=>{M.font=+e.target.value; $("fontVal").textContent=M.font+" px"; render();};
 $("rot").oninput=e=>{M.rot=+e.target.value; $("rotVal").textContent=M.rot+"°"; render();};
 $("reset0").onclick=()=>{M.rot=0;$("rot").value=0;$("rotVal").textContent="0°";render();};
 $("fit").onclick=fit;
-$("applyId").onclick=applyPalette;
-$("mono").onclick=monochrome;
-$("applySel").onclick=()=>{const c=$("selColor").value; M.selected.forEach(i=>M.color[i]=c); render();};
-$("applySelCircle").onclick=()=>{const c=$("selCircleColor").value; M.selected.forEach(i=>M.circleColor[i]=c); render();};
-$("resetCircle").onclick=()=>{M.circleColor={}; render();};
+$("applyId").onclick=()=>{applyPalette(); touch();};
+$("mono").onclick=()=>{monochrome(); touch();};
+$("applySel").onclick=()=>{const c=$("selColor").value; M.selected.forEach(i=>M.color[i]=c); render(); touch();};
+$("applySelCircle").onclick=()=>{const c=$("selCircleColor").value; M.selected.forEach(i=>M.circleColor[i]=c); render(); touch();};
+$("resetCircle").onclick=()=>{M.circleColor={}; render(); touch();};
 $("selCircleColor").oninput=()=>{};
 $("selAll").onclick=()=>{M.selected.clear();for(let i=0;i<M.n;i++)M.selected.add(i);updateSelInfo();render();};
 $("selNone").onclick=()=>{M.selected.clear();updateSelInfo();render();};
 // H-bonds
-$("applyBond").onclick=()=>{const c=$("bondColor").value; M.selBond.forEach(i=>M.bondColor[i]=c); render();};
+$("applyBond").onclick=()=>{const c=$("bondColor").value; M.selBond.forEach(i=>M.bondColor[i]=c); render(); touch();};
 $("bondAll").onclick=()=>{M.selBond.clear();for(let i=0;i<M.n;i++)if(M.pt[i]>i)M.selBond.add(i);updateBondInfo();render();};
-$("bondReset").onclick=()=>{M.bondColor={};M.selBond.clear();updateBondInfo();render();};
+$("bondReset").onclick=()=>{M.bondColor={};M.selBond.clear();updateBondInfo();render(); touch();};
 // toggles that only re-render
-["cCircle","cBack","cPair","cLetter","cBold","frameMode","fillMode"].forEach(id=>$(id).onchange=render);
-$("tailMode").onchange=relayout;
+["cCircle","cBack","cPair","cLetter","cBold","frameMode","fillMode"].forEach(id=>$(id).onchange=()=>{render(); touch();});
+$("tailMode").onchange=()=>{relayout(); touch();};
 $("numEvery").oninput=render;
 $("frameColor").oninput=render; $("fillColor").oninput=render;
 $("frameW").oninput=e=>{$("frameWVal").textContent=e.target.value+" px"; render();};
@@ -859,16 +1028,16 @@ $("pngScale").oninput=updateExportInfo;
 $("bgColor").oninput=e=>{$("stage").style.background=e.target.value; render();};
 document.querySelectorAll("input[data-id]").forEach(inp=>inp.oninput=()=>{ M.palette[inp.dataset.id]=inp.value; render(); });
 
-/* examples */
+/* examples — load into the active sequence */
 $("ex1").onclick=()=>{                 // simple hairpin with a bulge
   $("seq").value="GGGCAGCUUCGGCUGCCCAAAA";
   $("dot").value="(((((((...))))))).....";
-  build();
+  renderActiveFromBoxes();
 };
 $("ex2").onclick=()=>{                 // three-way multiloop
   $("seq").value="GGGGGGAAACCCGGGAAACCCGGGAAACCCCCC";
   $("dot").value="((((((...)))(((...)))(((...))))))";
-  build();
+  renderActiveFromBoxes();
 };
 
 /* tabs (top navigator) */
@@ -886,11 +1055,23 @@ $("selbar").style.display='none';   // hidden on the Input tab at start
 /* initial */
 window.addEventListener("resize",()=>{ if(M.n) render(); });
 $("stage").style.background=$("bgColor").value;
-(function(){                              // restore saved input, else load the demo
-  let s=null,d=null;
-  try{ s=localStorage.getItem("aptarender_seq"); d=localStorage.getItem("aptarender_dot"); }catch(e){}
-  if(s && d && s.trim()){ $("seq").value=s; $("dot").value=d; build(); }
-  else { $("ex1").click(); }
+(function init(){
+  let saved=null;
+  try{ saved=JSON.parse(localStorage.getItem("aptarender_docs")||"null"); }catch(e){}
+  if(saved && saved.docs && saved.docs.length){
+    docs=saved.docs.map(d=>Object.assign(newDoc(),d));
+    if(typeof saved.uniform==='boolean') $("uniformStyle").checked=saved.uniform;
+    active=Math.min(Math.max(0,saved.active|0),docs.length-1);
+    applyDoc(active);
+  } else {
+    // migrate old single-seq storage, else load the demo
+    let s=null,d=null;
+    try{ s=localStorage.getItem("aptarender_seq"); d=localStorage.getItem("aptarender_dot"); }catch(e){}
+    if(s && d && s.trim()){ docs=[newDoc('seq 1',s,d)]; }
+    else { docs=[newDoc('seq 1',"GGGCAGCUUCGGCUGCCCAAAA","(((((((...))))))).....")]; }
+    active=0; applyDoc(0); persist();
+  }
+  renderDocList();
 })();
 </script>
 </body>
