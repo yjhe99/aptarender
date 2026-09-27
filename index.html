@@ -17,10 +17,22 @@
     color:var(--text); background:var(--bg); display:flex; overflow:hidden;
   }
   #panel{
-    width:320px; min-width:320px; height:100vh; overflow-y:auto;
+    width:320px; min-width:200px; max-width:80vw; height:100vh; overflow-y:auto;
     background:var(--panel); border-right:1px solid var(--line); padding:14px 14px 40px;
+    flex:0 0 auto;
   }
-  #stage{flex:1; position:relative; background:
+  #panelResize{
+    width:6px; flex:0 0 auto; cursor:col-resize; background:transparent;
+    position:relative; z-index:5;
+  }
+  #panelResize::after{
+    content:""; position:absolute; top:0; bottom:0; left:2px; width:2px;
+    background:var(--line);
+  }
+  #panelResize:hover::after, #panelResize.dragging::after{ background:var(--accent); }
+  body.resizing-panel{ cursor:col-resize; user-select:none; }
+  body.resizing-panel #canvas{ pointer-events:none; }
+  #stage{flex:1; position:relative; min-width:0; background:
     radial-gradient(circle at 20% 20%, #12151c, #0c0e12);}
   svg#canvas{width:100%; height:100%; display:block; cursor:grab}
   svg#canvas.panning{cursor:grabbing}
@@ -65,6 +77,8 @@
   .badge{position:absolute; top:10px; right:12px; background:var(--panel);
     border:1px solid var(--line); border-radius:20px; padding:5px 11px; color:var(--muted);
     font-size:11px; pointer-events:none}
+  .histbar{position:absolute; top:10px; left:12px; z-index:6; display:flex; gap:6px}
+  .histbar button:disabled{opacity:.35; cursor:default}
   .split{display:flex; gap:6px}
   .base-hit{cursor:pointer}
   .bond-hit{cursor:pointer}
@@ -108,6 +122,7 @@
       <button class="tab" data-tab="letters">Letters</button>
       <button class="tab" data-tab="circles">Circles</button>
       <button class="tab" data-tab="lines">Lines</button>
+      <button class="tab" data-tab="complex">Complex</button>
       <button class="tab" data-tab="export">Export</button>
     </nav>
     <div id="selbar">
@@ -144,7 +159,7 @@
       </div>
       <div id="err"></div>
       <div class="hint">Use nested <code>( )</code> and <code>.</code> for the structure.
-        Drag the background to pan, scroll to zoom.</div>
+        Drag the background to pan, scroll to zoom, drag a base to reposition its branch.</div>
     </div>
   </section>
 
@@ -160,10 +175,18 @@
       </div>
     </div>
     <div class="grp">
+      <h2>Manual positions</h2>
+      <div class="hint" style="margin-top:0">Drag a base on the canvas to move its whole stem/loop
+        branch; Alt+drag moves just that one base.</div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="resetPositions">Reset all positions</button>
+      </div>
+    </div>
+    <div class="grp">
       <h2>Free tails</h2>
       <label>Free 5′/3′ tails (unpaired ends)</label>
       <select id="tailMode">
-        <option value="natural">Natural (curved)</option>
+        <option value="natural">Natural (default layout)</option>
         <option value="flatten">Flatten (straight)</option>
         <option value="L">L-shape (90° corner)</option>
         <option value="perp">Perpendicular (90° out)</option>
@@ -281,6 +304,58 @@
     </div>
   </section>
 
+  <!-- ============ COMPLEX (two-strand hybridization) ============ -->
+  <section class="pane" data-pane="complex">
+    <div class="grp">
+      <h2>Complexes <span id="cxCount"></span></h2>
+      <div id="cxlist"></div>
+      <div class="hint" id="cxHint" style="margin-top:8px">A complex joins two of your sequences with a
+        manually-set duplex region. Build one below, then open the Letters/Circles tabs to color each strand.</div>
+    </div>
+    <div class="grp">
+      <h2>Build a complex</h2>
+      <label>Strand A</label>
+      <select id="cxDocA"></select>
+      <label>Strand B</label>
+      <select id="cxDocB"></select>
+      <div class="row" style="margin-top:6px">
+        <div>
+          <label>A range (1-based, inclusive)</label>
+          <div class="row"><input type="number" id="cxAStart" min="1" value="1">
+            <input type="number" id="cxAEnd" min="1" value="1"></div>
+        </div>
+        <div>
+          <label>B range (1-based, inclusive)</label>
+          <div class="row"><input type="number" id="cxBStart" min="1" value="1">
+            <input type="number" id="cxBEnd" min="1" value="1"></div>
+        </div>
+      </div>
+      <label style="margin-top:8px">Mode</label>
+      <select id="cxMode">
+        <option value="replace">Replace — break any existing pair that touches/spans the region</option>
+        <option value="side">Side-by-side — keep A's own pairing, attach B alongside it</option>
+      </select>
+      <div class="row" style="margin-top:9px">
+        <button class="primary" id="cxBuild">Build complex</button>
+      </div>
+      <div id="cxErr" class="hint" style="color:var(--danger); white-space:pre-wrap"></div>
+      <div class="hint">A[aStart..aEnd] pairs antiparallel with B[bStart..bEnd] — ranges must be equal length.
+        <b>Replace mode:</b> any existing base pair that touches or spans the duplex region (in either
+        strand) is broken, and the region becomes a fresh straight duplex.
+        <b>Side-by-side mode:</b> strand A's own structure is left completely untouched (including
+        pairs inside the chosen range) and B is laid out running parallel to it — the same A bases can
+        end up with two drawn bonds (their own, plus the new one to B). This isn't biophysically
+        possible for real base pairing, but the tool won't stop you — draw what communicates the
+        figure you need. Exactly one contiguous region either way in this version.</div>
+    </div>
+    <div class="grp">
+      <h2>Duplex rung color</h2>
+      <input type="color" id="dupColor" value="#ffd166">
+      <div class="hint">Intramolecular H-bonds keep using the Lines tab's rung color / per-bond colors from
+        each strand's own sequence. Individual duplex rungs aren't separately colorable in this version.</div>
+    </div>
+  </section>
+
   <!-- ============ EXPORT ============ -->
   <section class="pane" data-pane="export">
     <div class="grp">
@@ -308,8 +383,14 @@
   </section>
 </div>
 
+<div id="panelResize" title="Drag to resize panel"></div>
+
 <div id="stage">
   <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div class="histbar" id="histbar">
+    <button class="mini" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
+    <button class="mini" id="redoBtn" title="Redo (Ctrl+Y)">↷ Redo</button>
+  </div>
   <div class="badge" id="badge">—</div>
 </div>
 
@@ -323,7 +404,10 @@ const M = {
   seq:"", n:0,
   pt:[],          // nested () pair table, -1 if unpaired
   pkPairs:[],     // [ [i,j], ... ] pseudoknot pairs
-  x:[], y:[],     // model coords (px units)
+  x:[], y:[],     // model coords (px units) — the auto-layout baseline, untouched by dragging
+  offX:[], offY:[], // per-base manual drag offsets (px, model space), added on top of x/y at render time.
+                     // KNOWN LIMITATION: these don't get renormalized if computeLayout reruns (font/tail-mode
+                     // change) — a manually-placed branch can look off relative to its new neighbours afterward.
   color:[],       // per-base letter color
   circleColor:{}, // per-base circle-fill override, keyed by index; falls back to fill mode
   bondColor:{},   // per-H-bond color, keyed by lower base index; falls back to global
@@ -333,6 +417,21 @@ const M = {
   zoom:1, panX:0, panY:0,
   rot:0, font:18,
   palette:{A:"#4c9f70",U:"#e15554",T:"#e1bc29",G:"#7768ae",C:"#3b8ea5"},
+};
+
+/* ---------- complex model (Feature #4: two-strand hybridization) ----------
+   Deliberately kept SEPARATE from M rather than generalizing M to N strands —
+   this is the single biggest scope decision here: it means single/multi-sequence
+   mode (M, docs[]) is completely untouched by any of this, at the cost of some
+   duplicated rendering code between render()/renderComplex() and friends.
+   Colors/circleColor/bondColor for each strand are NOT duplicated here — they're
+   read straight from docs[complexes[idx].docA/.docB] at render time, so any
+   per-base coloring you already did in single-sequence mode carries over. */
+const CM = {
+  active:false, idx:-1,
+  seqA:"", nA:0, ptA:[], xA:[], yA:[], offXA:[], offYA:[], selA:new Set(),
+  seqB:"", nB:0, ptB:[], xB:[], yB:[], offXB:[], offYB:[], selB:new Set(),
+  dupLen:0,
 };
 
 /* ---------- parse dot-bracket (with pseudoknots) ---------- */
@@ -424,27 +523,39 @@ function computeLayout(n, pt, S, tailMode){
     for(const it of items) if(it.t==='p') buildStem(it.a,it.b,cx,cy);
   }
 
-  // ---- exterior loop ----
+  // ---- exterior level ----
+  // Bases here are NOT enclosed by any base pair (they're the free 5'/3' ends, or the
+  // linkers between separate top-level stems), so they get a straight backbone instead
+  // of a circle — a circle is only meaningful for content actually enclosed by a real
+  // "("..")" pair (hairpin loops, internal loops, multiloops), which is exactly what
+  // drawLoop (called from buildStem, below) still handles, so nested loops keep their
+  // circular arrangement unchanged. A top-level stem's two rails continue forward in the
+  // SAME direction the backbone was already heading (+x), offset from each other by one
+  // rung-width — not a 90° turn off the backbone — so the whole strand keeps flowing in
+  // one direction instead of sprouting perpendicular branches.
   const items=[]; let k=0;
   while(k<n){
     if(pt[k]===-1){ items.push({t:'b',i:k}); k++; }
     else { items.push({t:'p',a:k,b:pt[k]}); k=pt[k]+1; }
   }
-  let base=0; for(const it of items) base += (it.t==='p'?2:1);
-  let m=base+1; if(m<3)m=3;                  // +1 virtual gap = the 5'/3' opening
-  const r=S/(2*Math.sin(Math.PI/m));
-  const D=2*Math.PI/m;
-  const th0=Math.PI/2+D;                      // opening near the bottom
-  const seq=[];
+  let curX=0, curY=0;
   for(const it of items){
-    if(it.t==='b') seq.push(it.i);
-    else { seq.push(it.a); seq.push(it.b); }
+    if(it.t==='b'){
+      x[it.i]=curX; y[it.i]=curY;
+      curX+=S;
+    } else {
+      x[it.a]=curX;  y[it.a]=curY;
+      x[it.b]=curX;  y[it.b]=curY+S;         // opposite rail starts one rung-width over
+      // force buildStem's outward direction to be +x (continue forward, no turn) by
+      // handing it a "center" that sits one step to the left of the rung midpoint
+      buildStem(it.a, it.b, curX-1, curY+S/2);
+      let maxX=curX;
+      for(let idx=it.a; idx<=it.b; idx++) if(x[idx]>maxX) maxX=x[idx];
+      curX=maxX+S;                           // resume the backbone past the whole branch
+      // curY is left as-is (the pre-stem baseline), so the backbone after the branch
+      // lines back up with the branch's near rail rather than its far one.
+    }
   }
-  for(let p=0;p<seq.length;p++){
-    const th=th0+D*p;
-    x[seq[p]]=r*Math.cos(th); y[seq[p]]=r*Math.sin(th);
-  }
-  for(const it of items) if(it.t==='p') buildStem(it.a,it.b,0,0);
 
   // ---- optionally reshape the free 5'/3' tails ----
   if(tailMode && tailMode!=='natural'){
@@ -493,15 +604,270 @@ function computeLayout(n, pt, S, tailMode){
   return {x,y};
 }
 
+/* ---------- two-strand complex layout (Feature #4) ---------- */
+// Strips any base pair that touches OR SPANS [s,e] — i.e. one endpoint inside the region
+// (a direct conflict) as well as any pair with one endpoint before s and the other after e
+// (an outer pair that would otherwise enclose the duplex region as if it were a nested loop).
+// That second case — a surviving stem straddling the hybridization site — is a real structural
+// possibility the handoff's "two independent flanks" model doesn't handle; breaking it too is a
+// deliberate v1 simplification (flagged again in the build UI when it happens) rather than
+// attempting to lay out a stem with a duplex nested partway through it.
+function breakForDuplex(pt, s, e){
+  const out=pt.slice();
+  for(let i=0;i<out.length;i++){
+    const j=out[i]; if(j===-1) continue;
+    const lo=Math.min(i,j), hi=Math.max(i,j);
+    const touches = (i>=s&&i<=e) || (j>=s&&j<=e);
+    const crosses = lo<s && hi>e;
+    if(touches||crosses){ out[i]=-1; out[j]=-1; }
+  }
+  return out;
+}
+function countBrokenForDuplex(pt, s, e){
+  let c=0;
+  for(let i=0;i<pt.length;i++){
+    const j=pt[i]; if(j===-1||j<i) continue;
+    const touches=(i>=s&&i<=e)||(j>=s&&j<=e), crosses=(i<s&&j>e);
+    if(touches||crosses) c++;
+  }
+  return c;
+}
+// Re-indexes the sub-range [lo,hi) of a (already duplex-conflict-free) pair table to a local,
+// self-contained 0-based table computeLayout can run on independently.
+function sliceFlankPT(pt, lo, hi){
+  const local=new Array(hi-lo).fill(-1);
+  for(let i=lo;i<hi;i++){ const j=pt[i]; if(j!==-1 && j>=lo && j<hi) local[i-lo]=j-lo; }
+  return local;
+}
+// Rotates+translates one flank's own (independently-computed) layout so its attachment base
+// (attachLocalIdx) lands at (targetX,targetY) and the flank extends outward along targetAngleDeg.
+// Reference direction is the flank's PRINCIPAL AXIS relative to the attach point — the direction of
+// maximum spread across every point in the flank (standard 2D point-cloud technique), signed toward
+// wherever most of the flank's own mass actually is. This replaced an earlier "farthest single
+// point" heuristic: that version could be thrown badly off-course by one straggling point (e.g. a
+// short free tail hanging off the far side of a stem+loop) even when the bulk of the flank's shape
+// pointed a completely different way — exactly the kind of lopsided flank (small stem + big loop +
+// a leftover unpaired tail from a partially-broken original pair) that shows up when a duplex region
+// only partially overlaps an existing stem. It's still a heuristic, and an unusual enough shape can
+// still come out at an angle that needs a manual nudge — that's what drag-to-reposition is for.
+function attachFlank(n, flankXY, attachLocalIdx, targetX, targetY, targetAngleDeg){
+  const {x,y}=flankXY;
+  if(n===0) return {x:[],y:[]};
+  const ax=x[attachLocalIdx], ay=y[attachLocalIdx];
+  let refAngle=0;
+  if(n>1){
+    let Sxx=0,Syy=0,Sxy=0;
+    for(let i=0;i<n;i++){ const dx=x[i]-ax, dy=y[i]-ay; Sxx+=dx*dx; Syy+=dy*dy; Sxy+=dx*dy; }
+    if(Sxx>1e-9||Syy>1e-9){
+      refAngle=0.5*Math.atan2(2*Sxy, Sxx-Syy);              // principal axis, mod 180°
+      const rx=Math.cos(refAngle), ry=Math.sin(refAngle);
+      let proj=0; for(let i=0;i<n;i++) proj += (x[i]-ax)*rx + (y[i]-ay)*ry;
+      if(proj<0) refAngle+=Math.PI;                          // pick the sign toward the flank's own bulk
+    }
+  }
+  const rot = targetAngleDeg*Math.PI/180 - refAngle;
+  const cos=Math.cos(rot), sin=Math.sin(rot);
+  const outX=new Array(n), outY=new Array(n);
+  for(let i=0;i<n;i++){
+    const dx=x[i]-ax, dy=y[i]-ay;
+    outX[i]=targetX+dx*cos-dy*sin; outY[i]=targetY+dx*sin+dy*cos;
+  }
+  return {x:outX,y:outY};
+}
+// The whole two-strand layout: duplex ladder in the middle, each of the up-to-four flanks laid
+// out independently via the SAME computeLayout used for single sequences, then stitched onto the
+// matching duplex end. Throws on bad ranges/length mismatch; returns {broken} so the caller can
+// tell the user how many pre-existing pairs got broken to make room for the duplex.
+function computeComplexLayout(seqA, ptAOrig, seqB, ptBOrig, region, S, tailMode){
+  const {aStart,aEnd,bStart,bEnd}=region;
+  const nA=seqA.length, nB=seqB.length;
+  if(!(Number.isInteger(aStart)&&Number.isInteger(aEnd)&&aStart>=0&&aEnd<nA&&aStart<=aEnd))
+    throw `Invalid A range (sequence is ${nA} nt).`;
+  if(!(Number.isInteger(bStart)&&Number.isInteger(bEnd)&&bStart>=0&&bEnd<nB&&bStart<=bEnd))
+    throw `Invalid B range (sequence is ${nB} nt).`;
+  const dupLen=aEnd-aStart+1;
+  if(dupLen!==bEnd-bStart+1)
+    throw `Duplex region lengths differ: A range is ${dupLen} nt, B range is ${bEnd-bStart+1} nt.`;
+
+  const broken=countBrokenForDuplex(ptAOrig,aStart,aEnd)+countBrokenForDuplex(ptBOrig,bStart,bEnd);
+  const ptA=breakForDuplex(ptAOrig,aStart,aEnd), ptB=breakForDuplex(ptBOrig,bStart,bEnd);
+
+  const xA=new Array(nA).fill(0), yA=new Array(nA).fill(0);
+  const xB=new Array(nB).fill(0), yB=new Array(nB).fill(0);
+  const rungY=S*1.6;                                   // fixed vertical gap between the two backbones
+  for(let k=0;k<dupLen;k++){ xA[aStart+k]=k*S; yA[aStart+k]=0; }              // A: left -> right
+  for(let m=0;m<dupLen;m++){ xB[bStart+m]=(dupLen-1-m)*S; yB[bStart+m]=rungY; } // B: right -> left (antiparallel)
+
+  function doFlank(lo,hi,pt,attachLocalIdx,dupEndX,dupEndY,angleDeg,into){    // hi exclusive
+    if(hi<=lo) return;
+    const local=sliceFlankPT(pt,lo,hi);
+    const lay=computeLayout(local.length, local, S, tailMode);
+    // stand-off distance adapts to how far this flank's own farthest point reaches from its attach
+    // base: rotating a rigid shape can't change that internal distance, only its heading, so a fixed
+    // 1-SPACING stand-off can let a far-reaching point (e.g. a straggling free tail) swing back near
+    // the duplex regardless of orientation. Standing off by (that reach + S) guarantees every flank
+    // point stays at least S from the duplex end, by the triangle inequality — provable, not hoped for.
+    let R=0; for(let i=0;i<local.length;i++) R=Math.max(R,Math.hypot(lay.x[i]-lay.x[attachLocalIdx],lay.y[i]-lay.y[attachLocalIdx]));
+    const standoff=R+S;
+    const rad=angleDeg*Math.PI/180;
+    const targetX=dupEndX+Math.cos(rad)*standoff, targetY=dupEndY+Math.sin(rad)*standoff;
+    const at=attachFlank(local.length, lay, attachLocalIdx, targetX, targetY, angleDeg);
+    for(let i=0;i<local.length;i++){ into.x[lo+i]=at.x[i]; into.y[lo+i]=at.y[i]; }
+  }
+  doFlank(0, aStart, ptA, aStart-1, 0, 0, 225, {x:xA,y:yA});                    // A 5' flank: up-left
+  doFlank(aEnd+1, nA, ptA, 0, (dupLen-1)*S, 0, -45, {x:xA,y:yA});               // A 3' flank: up-right
+  doFlank(0, bStart, ptB, bStart-1, (dupLen-1)*S, rungY, 45, {x:xB,y:yB});      // B 5' flank: down-right
+  doFlank(bEnd+1, nB, ptB, 0, 0, rungY, 135, {x:xB,y:yB});                      // B 3' flank: down-left
+
+  return {xA,yA,xB,yB,ptA,ptB,dupLen,broken};
+}
+
+// ---- alternate complex mode: SIDE hybridization (don't break anything) ----
+// Neither strand's own intramolecular pairing is touched — A is laid out completely normally via
+// the ordinary computeLayout (its own stem stays exactly where a single-sequence render would put
+// it). Each hybridizing base of B is then placed at a fixed perpendicular offset from A's ACTUAL
+// per-base coordinate at the corresponding position — not a fresh straight ladder, and not a rigid
+// transform of B's own separately-computed shape (an earlier version of this tried that; an
+// unpaired stretch lays out as an arc via the ordinary loop code, not a line, so forcing just its
+// two endpoints to match up left everything between them off-axis — this version sidesteps that by
+// reading A's real coordinates directly, which works whether or not A's own segment is perfectly
+// straight). Anything B has beyond the hybridizing region (its own flanks/hairpins) is attached
+// with the same doFlank/attachFlank machinery computeComplexLayout uses, just anchored to B's
+// placed hybridizing segment instead of a fresh ladder.
+// Renders with the SAME renderComplex()/buildComplexExportSVG() as the ladder mode — the only
+// difference is what feeds CM.xA/yA/xB/yB/ptA/ptB, so a base can end up with two drawn rungs (its
+// own intramolecular one, plus the new one to B) — not biophysically real, matches this app's
+// art-first premise.
+function computeSideHybridLayout(seqA, ptAOrig, seqB, ptBOrig, region, S, tailModeA, tailModeB){
+  const {aStart,aEnd,bStart,bEnd}=region;
+  const nA=seqA.length, nB=seqB.length;
+  if(!(Number.isInteger(aStart)&&Number.isInteger(aEnd)&&aStart>=0&&aEnd<nA&&aStart<=aEnd))
+    throw `Invalid A range (sequence is ${nA} nt).`;
+  if(!(Number.isInteger(bStart)&&Number.isInteger(bEnd)&&bStart>=0&&bEnd<nB&&bStart<=bEnd))
+    throw `Invalid B range (sequence is ${nB} nt).`;
+  const dupLen=aEnd-aStart+1;
+  if(dupLen!==bEnd-bStart+1)
+    throw `Duplex region lengths differ: A range is ${dupLen} nt, B range is ${bEnd-bStart+1} nt.`;
+  if(dupLen<2) throw "The hybridizing region needs at least 2 nt, to get a direction to offset along from A's own arm.";
+
+  const layA=computeLayout(nA, ptAOrig, S, tailModeA);     // A: completely normal, nothing broken
+  // B's own pairs that straddle the hybridizing region (one foot inside [bStart,bEnd], one outside)
+  // can't be preserved — their partner is about to be forced onto the offset line, wherever that
+  // used to be. Left alone, ptB would still claim the bond exists while the two ends land in
+  // completely unrelated places, and the renderer would dutifully draw a rung spanning the whole
+  // structure. Reusing breakForDuplex here only touches B (never A, which stays fully untouched —
+  // that's the entire point of this mode) and only the pairs that are actually incompatible with
+  // the forced repositioning; anything of B's own structure entirely outside [bStart,bEnd] is
+  // unaffected.
+  const broken=countBrokenForDuplex(ptBOrig,bStart,bEnd);
+  const ptBFixed=breakForDuplex(ptBOrig,bStart,bEnd);
+  const A0={x:layA.x[aStart],y:layA.y[aStart]}, A1={x:layA.x[aEnd],y:layA.y[aEnd]};
+  let dx=A1.x-A0.x, dy=A1.y-A0.y; const armLen=Math.hypot(dx,dy)||1; dx/=armLen; dy/=armLen;
+  const perp={x:-dy,y:dx};
+
+  // B is drawn as a line running parallel to A's own arm. A fixed offset can land right on
+  // top of whatever ELSE A occupies alongside that same stretch (another stem, a loop, a free
+  // tail) — so instead, scan A's own layout (excluding the arm bases themselves, which B
+  // corresponds to 1:1) for anything within B's longitudinal span, on each side of the arm,
+  // and push B's offset out far enough to clear past the farthest such point, on whichever
+  // side needs less push-out. Falls back to a small default when nothing is in the way.
+  const BASE=S*1.6, MARGIN=S*0.6, PAD=S;
+  function reach(sign){
+    let maxAcross=0;
+    for(let i=0;i<nA;i++){
+      if(i>=aStart && i<=aEnd) continue;                   // the arm itself, not an obstacle
+      const vx=layA.x[i]-A0.x, vy=layA.y[i]-A0.y;
+      const along=vx*dx+vy*dy;
+      if(along<-PAD || along>armLen+PAD) continue;         // outside B's longitudinal span
+      const across=(vx*perp.x+vy*perp.y)*sign;
+      if(across>maxAcross) maxAcross=across;
+    }
+    return maxAcross;
+  }
+  const reachPos=reach(1), reachNeg=reach(-1);
+  const sign = reachPos<=reachNeg ? 1 : -1;                // whichever side needs less push-out
+  const rungY=Math.max(BASE, (sign===1?reachPos:reachNeg)+MARGIN);
+  const perpSigned={x:perp.x*sign, y:perp.y*sign};
+
+  const xB=new Array(nB).fill(0), yB=new Array(nB).fill(0);
+  for(let k=0;k<dupLen;k++){
+    const ai=aStart+k, bi=bEnd-k;                          // antiparallel correspondence
+    xB[bi]=layA.x[ai]+perpSigned.x*rungY; yB[bi]=layA.y[ai]+perpSigned.y*rungY;
+  }
+  function doFlank(lo,hi,pt,attachLocalIdx,targetX,targetY,angleDeg,into){    // hi exclusive
+    if(hi<=lo) return;
+    const local=sliceFlankPT(pt,lo,hi);
+    const lay=computeLayout(local.length, local, S, tailModeB);
+    let R=0; for(let i=0;i<local.length;i++) R=Math.max(R,Math.hypot(lay.x[i]-lay.x[attachLocalIdx],lay.y[i]-lay.y[attachLocalIdx]));
+    const standoff=R+S;
+    const rad=angleDeg*Math.PI/180;
+    const tX=targetX+Math.cos(rad)*standoff, tY=targetY+Math.sin(rad)*standoff;
+    const at=attachFlank(local.length, lay, attachLocalIdx, tX, tY, angleDeg);
+    for(let i=0;i<local.length;i++){ into.x[lo+i]=at.x[i]; into.y[lo+i]=at.y[i]; }
+  }
+  const alongDeg=Math.atan2(dy,dx)*180/Math.PI;    // B's flank angles, expressed relative to A's arm direction
+  // fan the flanks out on the SAME side as the chosen offset, so they don't cross back over A
+  doFlank(0, bStart, ptBFixed, bStart-1, xB[bStart], yB[bStart], alongDeg+sign*45, {x:xB,y:yB});
+  doFlank(bEnd+1, nB, ptBFixed, 0, xB[bEnd], yB[bEnd], alongDeg+180-sign*45, {x:xB,y:yB});
+
+  // sanity check for the most common misuse: Strand A is supposed to contribute the EXISTING stem
+  // this attaches alongside. If none of A's chosen range is actually paired in A's own structure,
+  // there's no real "arm" to offset from — A0->A1 ends up being some arbitrary chord across whatever
+  // shape A's own layout happens to be (e.g. a full circle for a totally unpaired strand), not a
+  // stem axis. This doesn't block building the complex (it might still be intentional), just flags
+  // the likely mistake.
+  let aHasPair=false; for(let i=aStart;i<=aEnd;i++) if(ptAOrig[i]!==-1){ aHasPair=true; break; }
+  const warning = aHasPair ? null :
+    "Strand A's chosen range has no base pairs of its own — side-by-side mode expects Strand A to "+
+    "contribute an existing stem to attach alongside. Did you mean to swap Strand A and Strand B?";
+
+  return {xA:layA.x, yA:layA.y, xB, yB, ptA:ptAOrig, ptB:ptBFixed, dupLen, broken, warning};
+}
+
 /* ---------- geometry helpers ---------- */
+function ex(i){ return M.x[i]+(M.offX[i]||0); }   // effective coord = auto layout + manual drag offset
+function ey(i){ return M.y[i]+(M.offY[i]||0); }
 function centroid(){
-  let sx=0,sy=0; for(let i=0;i<M.n;i++){sx+=M.x[i];sy+=M.y[i];}
+  let sx=0,sy=0; for(let i=0;i<M.n;i++){sx+=ex(i);sy+=ey(i);}
   return {cx:sx/M.n, cy:sy/M.n};
 }
 function rotated(i,c,cosA,sinA){
-  const dx=M.x[i]-c.cx, dy=M.y[i]-c.cy;
+  const dx=ex(i)-c.cx, dy=ey(i)-c.cy;
   return {x:c.cx+dx*cosA-dy*sinA, y:c.cy+dx*sinA+dy*cosA};
 }
+// the closed sub-structure "branch" rooted at base i, for drag-to-reposition.
+// Nested dot-bracket guarantees a paired base's whole subtree is the contiguous range [a,b].
+function branchIndicesIn(pt, i, wholeBranch){
+  if(wholeBranch && pt[i]!==-1){
+    const a=Math.min(i,pt[i]), b=Math.max(i,pt[i]);
+    const arr=[]; for(let k=a;k<=b;k++) arr.push(k);
+    return arr;
+  }
+  return [i];   // unpaired base, or Alt-drag forcing single-base mode
+}
+function branchIndices(i, wholeBranch){ return branchIndicesIn(M.pt, i, wholeBranch); }
+
+/* ---------- complex geometry (shares M.rot/zoom/panX/panY/font as the view state) ---------- */
+function cex(i){ return CM.xA[i]+(CM.offXA[i]||0); }
+function cey(i){ return CM.yA[i]+(CM.offYA[i]||0); }
+function cbx(i){ return CM.xB[i]+(CM.offXB[i]||0); }
+function cby(i){ return CM.yB[i]+(CM.offYB[i]||0); }
+function complexCentroid(){
+  let sx=0,sy=0,n=0;
+  for(let i=0;i<CM.nA;i++){sx+=cex(i);sy+=cey(i);n++;}
+  for(let i=0;i<CM.nB;i++){sx+=cbx(i);sy+=cby(i);n++;}
+  return n? {cx:sx/n,cy:sy/n} : {cx:0,cy:0};
+}
+function complexDisplayCoords(){
+  const c=complexCentroid();
+  const a=M.rot*Math.PI/180, cosA=Math.cos(a), sinA=Math.sin(a);
+  const rot=(x,y)=>{ const dx=x-c.cx, dy=y-c.cy; return {x:c.cx+dx*cosA-dy*sinA, y:c.cy+dx*sinA+dy*cosA}; };
+  const ptsA=new Array(CM.nA), ptsB=new Array(CM.nB);
+  for(let i=0;i<CM.nA;i++) ptsA[i]=rot(cex(i),cey(i));
+  for(let i=0;i<CM.nB;i++) ptsB[i]=rot(cbx(i),cby(i));
+  return {ptsA,ptsB};
+}
+function hasContent(){ return CM.active ? (CM.nA>0||CM.nB>0) : M.n>0; }
 function displayCoords(){
   const c=centroid();
   const a=M.rot*Math.PI/180, cosA=Math.cos(a), sinA=Math.sin(a);
@@ -518,6 +884,7 @@ function lum(hex){
 /* ---------- render ---------- */
 const svg=$("canvas");
 function render(){
+  if(CM.active) return renderComplex();
   while(svg.firstChild) svg.removeChild(svg.firstChild);
   // real background rect = WYSIWYG with export, and immune to browser auto-dark-mode
   const bg=document.createElementNS(SVGNS,"rect");
@@ -655,8 +1022,114 @@ function render(){
   updateExportInfo();
 }
 
+/* ---------- render a complex (Feature #4) ----------
+   Mirrors render() structurally (background -> hetero rungs -> intramolecular rungs ->
+   backbones -> circles layer -> letters layer) but for two coordinate arrays instead of one.
+   Numbering (numEvery) and per-bond click-to-recolor are NOT implemented for complexes in this
+   version — a deliberate scope cut, noted in the Complex tab's hint text. */
+function renderComplex(){
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+  const bg=document.createElementNS(SVGNS,"rect");
+  bg.setAttribute("x",0);bg.setAttribute("y",0);bg.setAttribute("width","100%");bg.setAttribute("height","100%");
+  bg.setAttribute("fill",$("bgColor").value);
+  svg.appendChild(bg);
+  if(!complexes[CM.idx]) return;
+  if(CM.nA===0 && CM.nB===0) return;
+  const {ptsA,ptsB}=complexDisplayCoords();
+  const g=document.createElementNS(SVGNS,"g");
+  g.setAttribute("transform",`translate(${M.panX},${M.panY}) scale(${M.zoom})`);
+  svg.appendChild(g);
+
+  const font=M.font;
+  const backColor=$("backColor").value, pairColor=$("pairColor").value, dupColor=$("dupColor").value;
+  const showBack=$("cBack").checked, showPair=$("cPair").checked,
+        showCircle=$("cCircle").checked, showLetter=$("cLetter").checked, bold=$("cBold").checked;
+  const frameMode=$("frameMode").value, fillMode=$("fillMode").value,
+        frameColor=$("frameColor").value, fillColor=$("fillColor").value;
+  const gap=font*0.62, circR=font*0.72, circW=+$("frameW").value;
+  const region=complexes[CM.idx].region;
+  const docA=docs[complexes[CM.idx].docA], docB=docs[complexes[CM.idx].docB];
+
+  function shorten(p,q,pad){ const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
+    return [{x:p.x+ux*pad,y:p.y+uy*pad},{x:q.x-ux*pad,y:q.y-uy*pad}]; }
+  function line(p,q,color,w){ const l=document.createElementNS(SVGNS,"line");
+    l.setAttribute("x1",p.x);l.setAttribute("y1",p.y);l.setAttribute("x2",q.x);l.setAttribute("y2",q.y);
+    l.setAttribute("stroke",color);l.setAttribute("stroke-width",w);l.setAttribute("stroke-linecap","round");
+    g.appendChild(l); }
+
+  // duplex (hetero) rungs — drawn first, distinct color, not individually selectable in v1
+  if(showPair) for(let k=0;k<CM.dupLen;k++){
+    const ai=region.aStart+k, bi=region.bEnd-k;
+    const [a,b]=shorten(ptsA[ai],ptsB[bi],gap);
+    line(a,b,dupColor,Math.max(1.6,font*0.13));
+  }
+  // per-strand intramolecular rungs (reuse each doc's own bondColor map — carries over from
+  // single-sequence-mode recoloring, but isn't individually clickable while viewing a complex)
+  function drawStrandBonds(pts,pt,n,bondColorMap){
+    if(!showPair) return;
+    const w=Math.max(1.4,font*0.11);
+    for(let i=0;i<n;i++){ const j=pt[i]; if(j<=i) continue;
+      const [a,b]=shorten(pts[i],pts[j],gap);
+      line(a,b,(bondColorMap&&bondColorMap[i])||pairColor,w); }
+  }
+  drawStrandBonds(ptsA,CM.ptA,CM.nA,docA.bondColor);
+  drawStrandBonds(ptsB,CM.ptB,CM.nB,docB.bondColor);
+  // backbones
+  function drawBackbone(pts,n){ if(!showBack) return;
+    for(let i=0;i<n-1;i++){ const [a,b]=shorten(pts[i],pts[i+1],gap*0.92); line(a,b,backColor,Math.max(1,font*0.08)); } }
+  drawBackbone(ptsA,CM.nA); drawBackbone(ptsB,CM.nB);
+
+  // bases: two-pass circles-then-letters, per strand, same ordering rule as single-sequence mode
+  const gBack=document.createElementNS(SVGNS,"g"), gFront=document.createElementNS(SVGNS,"g");
+  g.appendChild(gBack); g.appendChild(gFront);
+  function drawStrandBases(strandTag,pts,seq,n,colorArr,circleColorMap,selectedSet){
+    for(let i=0;i<n;i++){
+      const p=pts[i];
+      if(showCircle){
+        const cEl=document.createElementNS(SVGNS,"circle");
+        cEl.setAttribute("cx",p.x);cEl.setAttribute("cy",p.y);cEl.setAttribute("r",circR);
+        const bc=baseColor(seq[i]);
+        const fillC=(circleColorMap&&circleColorMap[i])||(fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
+        cEl.setAttribute("fill",fillC);
+        const stroke=frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
+        cEl.setAttribute("stroke",stroke); if(stroke!=="none") cEl.setAttribute("stroke-width",circW);
+        gBack.appendChild(cEl);
+      }
+      const hit=document.createElementNS(SVGNS,"circle");
+      hit.setAttribute("cx",p.x);hit.setAttribute("cy",p.y);hit.setAttribute("r",Math.max(circR,font*0.6));
+      hit.setAttribute("fill","transparent"); hit.setAttribute("class","base-hit");
+      hit.dataset.strand=strandTag; hit.dataset.i=i;
+      gBack.appendChild(hit);
+    }
+    for(let i=0;i<n;i++){
+      const p=pts[i];
+      if(selectedSet.has(i)){
+        const ring=document.createElementNS(SVGNS,"circle");
+        ring.setAttribute("cx",p.x);ring.setAttribute("cy",p.y);ring.setAttribute("r",font*0.82);
+        ring.setAttribute("fill","none");ring.setAttribute("stroke","#ff8c1a");
+        ring.setAttribute("stroke-width",2/M.zoom+0.8); gFront.appendChild(ring);
+      }
+      if(showLetter){
+        const t=document.createElementNS(SVGNS,"text");
+        t.setAttribute("x",p.x);t.setAttribute("y",p.y);t.setAttribute("text-anchor","middle");
+        t.setAttribute("dominant-baseline","central");
+        t.setAttribute("font-family","ui-monospace,Menlo,monospace"); t.setAttribute("font-size",font);
+        t.setAttribute("font-weight",bold?"700":"400"); t.setAttribute("fill",(colorArr&&colorArr[i])||"#c8cdd6");
+        t.setAttribute("class","base-hit"); t.dataset.strand=strandTag; t.dataset.i=i;
+        t.textContent=seq[i]; gFront.appendChild(t);
+      }
+    }
+  }
+  drawStrandBases('A',ptsA,CM.seqA,CM.nA,docA.color,docA.circleColor,CM.selA);
+  drawStrandBases('B',ptsB,CM.seqB,CM.nB,docB.color,docB.circleColor,CM.selB);
+
+  $("badge").textContent=`${CM.nA}+${CM.nB} nt (complex) · ${Math.round(M.zoom*100)}%`;
+  updateExportInfo();
+}
+
 /* ---------- fit ---------- */
 function fit(){
+  if(CM.active) return fitComplex();
   if(M.n===0) return;
   const w=svg.clientWidth, h=svg.clientHeight;
   if(w<2||h<2){ requestAnimationFrame(fit); return; }   // canvas not sized yet
@@ -672,9 +1145,25 @@ function fit(){
   M.panY=(h-(maxy-miny)*M.zoom)/2 - miny*M.zoom;
   render();
 }
+function fitComplex(){
+  if(CM.nA===0 && CM.nB===0) return;
+  const w=svg.clientWidth, h=svg.clientHeight;
+  if(w<2||h<2){ requestAnimationFrame(fitComplex); return; }
+  const {ptsA,ptsB}=complexDisplayCoords();
+  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+  for(const p of ptsA.concat(ptsB)){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
+    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
+  const pad=M.font*2.2; minx-=pad;miny-=pad;maxx+=pad;maxy+=pad;
+  const zx=w/(maxx-minx), zy=h/(maxy-miny);
+  M.zoom=Math.max(0.05,Math.min(zx,zy));
+  M.panX=(w-(maxx-minx)*M.zoom)/2 - minx*M.zoom;
+  M.panY=(h-(maxy-miny)*M.zoom)/2 - miny*M.zoom;
+  render();
+}
 
 /* export pixel dimensions at current PNG scale */
 function contentSize(){
+  if(CM.active) return complexContentSize();
   const pts=displayCoords();
   let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
   for(const p of pts){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
@@ -682,8 +1171,16 @@ function contentSize(){
   const pad=M.font*2.2;
   return {W:(maxx-minx)+2*pad, H:(maxy-miny)+2*pad};
 }
+function complexContentSize(){
+  const {ptsA,ptsB}=complexDisplayCoords();
+  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+  for(const p of ptsA.concat(ptsB)){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
+    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
+  const pad=M.font*2.2;
+  return {W:(maxx-minx)+2*pad, H:(maxy-miny)+2*pad};
+}
 function updateExportInfo(){
-  if(M.n===0){ $("pngDims").textContent="—"; return; }
+  if(!hasContent()){ $("pngDims").textContent="—"; return; }
   const {W,H}=contentSize(); const s=+$("pngScale").value||1;
   $("pngDims").textContent=`×${s} · ${Math.round(W*s)}×${Math.round(H*s)} px`;
 }
@@ -702,6 +1199,7 @@ function build(){
   M.seq=parsed.seq; M.n=parsed.n; M.pt=parsed.pt; M.pkPairs=parsed.pk;
   const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
   M.x=lay.x; M.y=lay.y;
+  M.offX=new Array(M.n).fill(0); M.offY=new Array(M.n).fill(0);
   M.color=new Array(M.n);
   M.selected.clear(); M.selBond.clear(); M.bondColor={}; M.circleColor={};
   applyPalette();      // default coloring
@@ -711,9 +1209,25 @@ function build(){
 
 /* relayout keeping colors/selection (flatten toggle) */
 function relayout(){
+  if(CM.active) return relayoutComplex();
   if(M.n===0) return;
   const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
   M.x=lay.x; M.y=lay.y;
+  render();
+}
+function relayoutComplex(){                // same known limitation as single-mode relayout: this
+  const cx=complexes[CM.idx]; if(!cx) return;   // recomputes the baseline, so existing manual
+  const docA=docs[cx.docA], docB=docs[cx.docB]; // offsets may look off relative to the new layout
+  let pA,pB;
+  try{ pA=parseStructure(docA.seq,docA.dot); pB=parseStructure(docB.seq,docB.dot); } catch(e){ return; }
+  let lay;
+  try{
+    lay = cx.mode==='side'
+      ? computeSideHybridLayout(pA.seq,pA.pt,pB.seq,pB.pt,cx.region,SPACING,$("tailMode").value,$("tailMode").value)
+      : computeComplexLayout(pA.seq,pA.pt,pB.seq,pB.pt,cx.region,SPACING,$("tailMode").value);
+  } catch(e){ return; }
+  CM.ptA=lay.ptA; CM.xA=lay.xA; CM.yA=lay.yA;
+  CM.ptB=lay.ptB; CM.xB=lay.xB; CM.yB=lay.yB;
   render();
 }
 
@@ -731,6 +1245,7 @@ function baseColor(ch){ return M.palette[ch] || "#c8cdd6"; }   // identity palet
 
 /* ---------- selection ---------- */
 function updateSelInfo(){
+  if(CM.active){ const n=CM.selA.size+CM.selB.size; $("selInfo").textContent = n? `${n} selected` : "none selected"; return; }
   const s=M.selected;
   $("selInfo").textContent = s.size? `${s.size} selected` : "none selected";
 }
@@ -738,29 +1253,72 @@ function updateBondInfo(){
   $("bondInfo").textContent = M.selBond.size? `${M.selBond.size} bond(s) selected` : "none selected";
 }
 
-/* ---------- interaction: pan / zoom / select ---------- */
+/* ---------- interaction: pan / zoom / select / drag-to-reposition ---------- */
 let dragging=false, moved=false, lastX=0,lastY=0;
+let baseDrag=null;      // {branch:[idx,...], lastX, lastY, moved} while dragging a base/branch
+let suppressClick=false; // set when a drag just ended, so the trailing native "click" doesn't also select
 svg.addEventListener("mousedown",e=>{
-  if(e.target.closest(".base-hit")||e.target.closest(".bond-hit")) return;  // click handler manages selection
+  const baseEl=e.target.closest(".base-hit");
+  if(baseEl){
+    const i=parseInt(baseEl.dataset.i);
+    const strand=CM.active ? baseEl.dataset.strand : null;
+    const pt = strand==='B' ? CM.ptB : (strand==='A' ? CM.ptA : M.pt);
+    // plain drag = move the whole branch rooted at this base's pair; Alt+drag = move just this base
+    baseDrag={ strand, branch:branchIndicesIn(pt, i, !e.altKey), lastX:e.clientX, lastY:e.clientY, moved:false };
+    return;                                   // don't also start a canvas pan
+  }
+  if(e.target.closest(".bond-hit")) return;    // click handler manages bond selection
   dragging=true; moved=false; lastX=e.clientX; lastY=e.clientY;
   svg.classList.add("panning");
 });
 window.addEventListener("mousemove",e=>{
+  if(baseDrag){
+    const sdx=e.clientX-baseDrag.lastX, sdy=e.clientY-baseDrag.lastY;
+    if(Math.abs(sdx)>1||Math.abs(sdy)>1) baseDrag.moved=true;
+    if(baseDrag.moved){
+      // screen-space mouse delta -> model-space delta: undo the render pipeline's zoom, then its
+      // rotation (render draws rotate(M.rot) first, then scale(zoom)+translate(pan) — so converting
+      // a delta back to model space undoes them in reverse order).
+      const a=-M.rot*Math.PI/180, cosA=Math.cos(a), sinA=Math.sin(a);
+      const zx=sdx/M.zoom, zy=sdy/M.zoom;
+      const mdx=zx*cosA-zy*sinA, mdy=zx*sinA+zy*cosA;
+      const offX = baseDrag.strand==='B' ? CM.offXB : baseDrag.strand==='A' ? CM.offXA : M.offX;
+      const offY = baseDrag.strand==='B' ? CM.offYB : baseDrag.strand==='A' ? CM.offYA : M.offY;
+      for(const idx of baseDrag.branch){ offX[idx]=(offX[idx]||0)+mdx; offY[idx]=(offY[idx]||0)+mdy; }
+      baseDrag.lastX=e.clientX; baseDrag.lastY=e.clientY;
+      render();
+    }
+    return;
+  }
   if(!dragging) return;
   moved=true;
   M.panX+=e.clientX-lastX; M.panY+=e.clientY-lastY;
   lastX=e.clientX; lastY=e.clientY; render();
 });
 window.addEventListener("mouseup",e=>{
+  if(baseDrag){
+    if(baseDrag.moved){ suppressClick=true; touch(); }   // persist the new offsets
+    baseDrag=null; return;
+  }
   if(dragging && !moved && !e.target.closest(".base-hit") && !e.target.closest(".bond-hit")){
-    M.selected.clear(); M.selBond.clear(); updateSelInfo(); updateBondInfo(); render();
+    if(CM.active){ CM.selA.clear(); CM.selB.clear(); } else { M.selected.clear(); M.selBond.clear(); }
+    updateSelInfo(); updateBondInfo(); render();
   }
   dragging=false; svg.classList.remove("panning");
 });
 svg.addEventListener("click",e=>{
+  if(suppressClick){ suppressClick=false; return; }   // this click just ended a base/branch drag
   const base=e.target.closest(".base-hit");
   if(base){
     const i=parseInt(base.dataset.i);
+    if(CM.active){
+      const strand=base.dataset.strand;
+      const sel = strand==='A' ? CM.selA : CM.selB;
+      const other = strand==='A' ? CM.selB : CM.selA;
+      if(e.shiftKey){ sel.has(i)?sel.delete(i):sel.add(i); }
+      else { const only = sel.size===1 && sel.has(i) && other.size===0; CM.selA.clear(); CM.selB.clear(); if(!only) sel.add(i); }
+      updateSelInfo(); render(); return;
+    }
     if(e.shiftKey){ M.selected.has(i)?M.selected.delete(i):M.selected.add(i); }
     else { const only=M.selected.size===1&&M.selected.has(i); M.selected.clear(); if(!only)M.selected.add(i); }
     updateSelInfo(); render(); return;
@@ -787,6 +1345,7 @@ svg.addEventListener("wheel",e=>{
 
 /* ---------- export ---------- */
 function buildExportSVG(){
+  if(CM.active) return buildComplexExportSVG();
   const pts=displayCoords();
   let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
   for(const p of pts){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
@@ -831,14 +1390,69 @@ function buildExportSVG(){
   S.push(`</svg>`);
   return {svg:S.join("\n"),W,H};
 }
+// mirrors buildExportSVG()'s structure but for two strands + duplex — numbering isn't exported
+// for complexes in this version, same scope cut as renderComplex().
+function buildComplexExportSVG(){
+  const {ptsA,ptsB}=complexDisplayCoords();
+  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+  for(const p of ptsA.concat(ptsB)){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
+    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
+  const pad=M.font*2.2; minx-=pad;miny-=pad;maxx+=pad;maxy+=pad;
+  const W=maxx-minx,H=maxy-miny, font=M.font;
+  const backColor=$("backColor").value, pairColor=$("pairColor").value, dupColor=$("dupColor").value;
+  const showBack=$("cBack").checked, showPair=$("cPair").checked, showCircle=$("cCircle").checked,
+        showLetter=$("cLetter").checked, bold=$("cBold").checked, transparent=$("cTransparent").checked;
+  const frameMode=$("frameMode").value, fillMode=$("fillMode").value, frameColor=$("frameColor").value, fillColor=$("fillColor").value;
+  const circR=font*0.72, circW=+$("frameW").value, gap=font*0.62;
+  const region=complexes[CM.idx].region;
+  const docA=docs[complexes[CM.idx].docA], docB=docs[complexes[CM.idx].docB];
+  const S=[];
+  S.push(`<svg xmlns="${SVGNS}" viewBox="${minx} ${miny} ${W} ${H}" width="${W}" height="${H}">`);
+  if(!transparent) S.push(`<rect x="${minx}" y="${miny}" width="${W}" height="${H}" fill="${$("bgColor").value}"/>`);
+  const seg=(p,q,pad)=>{const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
+    return [p.x+ux*pad,p.y+uy*pad,q.x-ux*pad,q.y-uy*pad];};
+  if(showPair) for(let k=0;k<CM.dupLen;k++){
+    const ai=region.aStart+k, bi=region.bEnd-k;
+    const [x1,y1,x2,y2]=seg(ptsA[ai],ptsB[bi],gap);
+    S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${dupColor}" stroke-width="${Math.max(1.6,font*0.13)}" stroke-linecap="round"/>`);
+  }
+  function strandBonds(pts,pt,n,bondColorMap){
+    if(!showPair) return;
+    for(let i=0;i<n;i++){const j=pt[i]; if(j<=i) continue;
+      const [x1,y1,x2,y2]=seg(pts[i],pts[j],gap);
+      S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${(bondColorMap&&bondColorMap[i])||pairColor}" stroke-width="${Math.max(1.4,font*0.11)}" stroke-linecap="round"/>`);}
+  }
+  strandBonds(ptsA,CM.ptA,CM.nA,docA.bondColor); strandBonds(ptsB,CM.ptB,CM.nB,docB.bondColor);
+  function backbone(pts,n){ if(!showBack) return;
+    for(let i=0;i<n-1;i++){const [x1,y1,x2,y2]=seg(pts[i],pts[i+1],gap*0.92);
+      S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${backColor}" stroke-width="${Math.max(1,font*0.08)}" stroke-linecap="round"/>`);} }
+  backbone(ptsA,CM.nA); backbone(ptsB,CM.nB);
+  function circles(pts,seq,n,colorArr,circleColorMap){
+    if(!showCircle) return;
+    for(let i=0;i<n;i++){const p=pts[i],bc=baseColor(seq[i]);
+      const fillC=(circleColorMap&&circleColorMap[i])||(fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
+      const strokeC=frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
+      const sw=strokeC!=="none"?` stroke="${strokeC}" stroke-width="${circW}"`:"";
+      S.push(`<circle cx="${p.x}" cy="${p.y}" r="${circR}" fill="${fillC}"${sw}/>`);}
+  }
+  circles(ptsA,CM.seqA,CM.nA,docA.color,docA.circleColor); circles(ptsB,CM.seqB,CM.nB,docB.color,docB.circleColor);
+  function letters(pts,seq,n,colorArr){
+    if(!showLetter) return;
+    for(let i=0;i<n;i++){const p=pts[i];
+      S.push(`<text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace,Menlo,monospace" font-size="${font}" font-weight="${bold?700:400}" fill="${(colorArr&&colorArr[i])||'#c8cdd6'}">${seq[i]}</text>`);}
+  }
+  letters(ptsA,CM.seqA,CM.nA,docA.color); letters(ptsB,CM.seqB,CM.nB,docB.color);
+  S.push(`</svg>`);
+  return {svg:S.join("\n"),W,H};
+}
 function download(name,blob){
   const url=URL.createObjectURL(blob);
   const a=document.createElement("a"); a.href=url; a.download=name; a.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-$("expSvg").onclick=()=>{ if(!M.n)return;
+$("expSvg").onclick=()=>{ if(!hasContent())return;
   download("aptarender.svg",new Blob([buildExportSVG().svg],{type:"image/svg+xml"})); };
-$("expPng").onclick=()=>{ if(!M.n)return;
+$("expPng").onclick=()=>{ if(!hasContent())return;
   const {svg:str,W,H}=buildExportSVG();
   const img=new Image();
   const url=URL.createObjectURL(new Blob([str],{type:"image/svg+xml"}));
@@ -854,6 +1468,7 @@ $("expPng").onclick=()=>{ if(!M.n)return;
 /* ---------- multiple sequences ---------- */
 const LIMIT=20;
 let docs=[]; let active=-1;
+let complexes=[];   // Feature #4: two-strand hybridization complexes (see CM for live working state)
 const STYLE_IDS=['font','cLetter','cBold','cCircle','frameMode','frameColor','frameW',
   'fillMode','fillColor','cBack','cPair','tailMode','backColor','pairColor','numEvery',
   'bgColor','cTransparent'];
@@ -873,7 +1488,7 @@ function applyStyle(s){
   M.palette={}; document.querySelectorAll('input[data-id]').forEach(inp=>M.palette[inp.dataset.id]=inp.value);
   $("stage").style.background=$("bgColor").value;
 }
-function newDoc(name,seq,dot){ return {name:name||'seq', seq:seq||'', dot:dot||'', color:[], circleColor:{}, bondColor:{}, view:null, style:null}; }
+function newDoc(name,seq,dot){ return {name:name||'seq', seq:seq||'', dot:dot||'', color:[], circleColor:{}, bondColor:{}, offset:null, view:null, style:null}; }
 function uniform(){ return $("uniformStyle").checked; }
 function applyPaletteNoRender(){
   for(const id of ['A','U','T','G','C']) M.palette[id]=document.querySelector(`input[data-id=${id}]`).value;
@@ -889,10 +1504,19 @@ function saveActive(){
   d.seq=$("seq").value; d.dot=$("dot").value;
   d.color=(M.color&&M.color.length)?M.color.slice():[];
   d.circleColor={...M.circleColor}; d.bondColor={...M.bondColor};
+  d.offset={x:(M.offX||[]).slice(), y:(M.offY||[]).slice()};
   d.view={zoom:M.zoom,panX:M.panX,panY:M.panY,rot:M.rot};
   d.style=readStyle();
 }
+function saveActiveComplex(){
+  if(!CM.active || CM.idx<0 || !complexes[CM.idx]) return;
+  const c=complexes[CM.idx];
+  c.offsetA={x:(CM.offXA||[]).slice(), y:(CM.offYA||[]).slice()};
+  c.offsetB={x:(CM.offXB||[]).slice(), y:(CM.offYB||[]).slice()};
+  c.view={zoom:M.zoom,panX:M.panX,panY:M.panY,rot:M.rot};
+}
 function applyDoc(i){                     // load doc i into UI + model (does NOT save previous)
+  CM.active=false;                        // opening a plain sequence always leaves complex view
   active=i; const d=docs[i]; $("err").textContent="";
   $("seq").value=d.seq||""; $("dot").value=d.dot||"";
   if(!uniform() && d.style) applyStyle(d.style);
@@ -903,6 +1527,8 @@ function applyDoc(i){                     // load doc i into UI + model (does NO
     M.seq=parsed.seq; M.n=parsed.n; M.pt=parsed.pt; M.pkPairs=parsed.pk;
     const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
     M.x=lay.x; M.y=lay.y; M.color=new Array(M.n);
+    M.offX=new Array(M.n).fill(0); M.offY=new Array(M.n).fill(0);
+    if(d.offset && d.offset.x && d.offset.x.length===M.n){ M.offX=d.offset.x.slice(); M.offY=d.offset.y.slice(); }
     M.selected.clear(); M.selBond.clear();
     applyPaletteNoRender();
     if(d.color && d.color.length===M.n) M.color=d.color.slice();
@@ -923,18 +1549,132 @@ function addDoc(seq,dot,name){
   if(docs.length>=LIMIT){ flashLimit(); return; }
   saveActive();
   docs.push(newDoc(name||('seq '+(docs.length+1)), seq||'', dot||''));
-  applyDoc(docs.length-1); persist();
+  applyDoc(docs.length-1); pushHistory();
 }
 function deleteDoc(i){
   saveActive(); docs.splice(i,1);
   if(docs.length===0){ docs.push(newDoc('seq 1','','')); active=0; }
   else { if(i<active) active--; if(active>=docs.length) active=docs.length-1; if(active<0) active=0; }
-  applyDoc(active); persist();
+  const beforeCx=complexes.length;
+  complexes=complexes.filter(c=>c.docA!==i && c.docB!==i)
+    .map(c=>({...c, docA:c.docA>i?c.docA-1:c.docA, docB:c.docB>i?c.docB-1:c.docB}));
+  if(complexes.length<beforeCx) $("docHint").textContent=`Removed ${beforeCx-complexes.length} complex(es) that used this sequence.`;
+  applyDoc(active); pushHistory();
 }
 function renameDoc(i){
   const v=prompt("Rename sequence:", docs[i].name||('seq '+(i+1)));
-  if(v && v.trim()){ docs[i].name=v.trim(); renderDocList(); persist(); }
+  if(v && v.trim()){ docs[i].name=v.trim(); renderDocList(); pushHistory(); }
 }
+
+/* ---------- complex management (Feature #4) ---------- */
+function newComplex(name,docA,docB,aStart,aEnd,bStart,bEnd,mode){
+  return { name:name||'complex', docA:docA??0, docB:docB??0, mode:mode||'replace',
+    region:{aStart:aStart||0,aEnd:aEnd||0,bStart:bStart||0,bEnd:bEnd||0},
+    offsetA:null, offsetB:null, view:null };
+}
+// loads complex i into CM + the shared view (M.zoom/pan/rot) and switches the canvas into complex mode
+function openComplex(i){
+  const c=complexes[i]; if(!c) return;
+  const docA=docs[c.docA], docB=docs[c.docB];
+  $("cxErr").textContent="";
+  if(!docA || !docB){ $("cxErr").textContent="One of this complex's sequences no longer exists."; return; }
+  let pA,pB;
+  try{ pA=parseStructure(docA.seq,docA.dot); pB=parseStructure(docB.seq,docB.dot); }
+  catch(e){ $("cxErr").textContent="⚠ One of the strands is no longer valid: "+e; return; }
+  let lay;
+  try{
+    lay = c.mode==='side'
+      ? computeSideHybridLayout(pA.seq,pA.pt,pB.seq,pB.pt,c.region,SPACING,$("tailMode").value,$("tailMode").value)
+      : computeComplexLayout(pA.seq,pA.pt,pB.seq,pB.pt,c.region,SPACING,$("tailMode").value);
+  }
+  catch(e){ $("cxErr").textContent="⚠ "+e; return; }
+  if(lay.warning) $("cxErr").textContent=lay.warning;
+  CM.active=true; CM.idx=i;
+  CM.seqA=pA.seq; CM.nA=pA.n; CM.ptA=lay.ptA; CM.xA=lay.xA; CM.yA=lay.yA;
+  CM.seqB=pB.seq; CM.nB=pB.n; CM.ptB=lay.ptB; CM.xB=lay.xB; CM.yB=lay.yB;
+  CM.dupLen=lay.dupLen;
+  CM.offXA=(c.offsetA&&c.offsetA.x.length===CM.nA)? c.offsetA.x.slice() : new Array(CM.nA).fill(0);
+  CM.offYA=(c.offsetA&&c.offsetA.y.length===CM.nA)? c.offsetA.y.slice() : new Array(CM.nA).fill(0);
+  CM.offXB=(c.offsetB&&c.offsetB.x.length===CM.nB)? c.offsetB.x.slice() : new Array(CM.nB).fill(0);
+  CM.offYB=(c.offsetB&&c.offsetB.y.length===CM.nB)? c.offsetB.y.slice() : new Array(CM.nB).fill(0);
+  CM.selA=new Set(); CM.selB=new Set();
+  // make sure each strand's per-base color array exists and matches its current length
+  if(!docA.color || docA.color.length!==CM.nA){
+    docA.color=new Array(CM.nA); for(let k=0;k<CM.nA;k++) docA.color[k]=M.palette[CM.seqA[k]]||"#c8cdd6";
+  }
+  if(!docB.color || docB.color.length!==CM.nB){
+    docB.color=new Array(CM.nB); for(let k=0;k<CM.nB;k++) docB.color[k]=M.palette[CM.seqB[k]]||"#c8cdd6";
+  }
+  if(!docA.circleColor) docA.circleColor={}; if(!docB.circleColor) docB.circleColor={};
+  if(!docA.bondColor) docA.bondColor={}; if(!docB.bondColor) docB.bondColor={};
+  updateSelInfo(); updateBondInfo();
+  if(c.view){ M.zoom=c.view.zoom; M.panX=c.view.panX; M.panY=c.view.panY; M.rot=c.view.rot;
+    $("rot").value=M.rot; $("rotVal").textContent=M.rot+"°"; render(); }
+  else fitComplex();
+  renderComplexList();
+}
+function deleteComplex(i){
+  if(CM.active) saveActiveComplex();
+  const wasActive = CM.active && CM.idx===i;
+  complexes.splice(i,1);
+  if(CM.active){
+    if(wasActive){ CM.active=false; applyDoc(active); }
+    else if(CM.idx>i) CM.idx--;
+  }
+  renderComplexList(); pushHistory();
+}
+function renderComplexList(){
+  const el=$("cxlist"); if(!el) return;
+  el.innerHTML='';
+  complexes.forEach((c,i)=>{
+    const row=document.createElement('div'); row.className='docrow'+((CM.active&&CM.idx===i)?' active':'');
+    const nm=document.createElement('span'); nm.className='docname';
+    nm.textContent=c.name||('complex '+(i+1));
+    nm.title="Click to open";
+    nm.onclick=()=>{ openComplex(i); };
+    const del=document.createElement('button'); del.className='docdel'; del.textContent='×'; del.title='Delete';
+    del.onclick=(ev)=>{ ev.stopPropagation(); deleteComplex(i); };
+    row.appendChild(nm); row.appendChild(del); el.appendChild(row);
+  });
+  $("cxCount").textContent=`(${complexes.length})`;
+}
+function refreshComplexPickers(){
+  const sel=$("cxDocA"); if(!sel) return;             // panel not built yet
+  const opts=docs.map((d,i)=>`<option value="${i}">${(d.name||('seq '+(i+1)))}</option>`).join('');
+  const prevA=$("cxDocA").value, prevB=$("cxDocB").value;
+  $("cxDocA").innerHTML=opts; $("cxDocB").innerHTML=opts;
+  if(docs[prevA]) $("cxDocA").value=prevA;
+  if(docs.length>1){ $("cxDocB").value = (prevB && docs[prevB] && prevB!==prevA) ? prevB : String(Math.min(1,docs.length-1)); }
+}
+$("cxBuild").onclick=()=>{
+  $("cxErr").textContent="";
+  const ai=+$("cxDocA").value, bi=+$("cxDocB").value;
+  if(!Number.isInteger(ai)||!Number.isInteger(bi)||!docs[ai]||!docs[bi]){ $("cxErr").textContent="Pick both strands."; return; }
+  if(ai===bi){ $("cxErr").textContent="Strand A and B must be different sequences."; return; }
+  saveActive();      // flush any pending edits in the textboxes before reading seq/dot
+  let pA,pB;
+  try{ pA=parseStructure(docs[ai].seq,docs[ai].dot); pB=parseStructure(docs[bi].seq,docs[bi].dot); }
+  catch(e){ $("cxErr").textContent="⚠ Both strands need a valid sequence+structure first: "+e; return; }
+  const aStart=(+$("cxAStart").value||1)-1, aEnd=(+$("cxAEnd").value||1)-1;
+  const bStart=(+$("cxBStart").value||1)-1, bEnd=(+$("cxBEnd").value||1)-1;
+  const mode=$("cxMode").value;
+  let lay;
+  try{
+    lay = mode==='side'
+      ? computeSideHybridLayout(pA.seq,pA.pt,pB.seq,pB.pt,{aStart,aEnd,bStart,bEnd},SPACING,$("tailMode").value,$("tailMode").value)
+      : computeComplexLayout(pA.seq,pA.pt,pB.seq,pB.pt,{aStart,aEnd,bStart,bEnd},SPACING,$("tailMode").value);
+  }
+  catch(e){ $("cxErr").textContent="⚠ "+e; return; }
+  const c=newComplex(`${docs[ai].name||'A'} × ${docs[bi].name||'B'}`, ai, bi, aStart,aEnd,bStart,bEnd, mode);
+  complexes.push(c);
+  openComplex(complexes.length-1);
+  renderComplexList();
+  const notes=[];
+  if(lay.broken>0) notes.push(`Built — ${lay.broken} existing base pair(s) touching or spanning the duplex region were broken.`);
+  if(lay.warning) notes.push(lay.warning);
+  if(notes.length) $("cxErr").textContent=notes.join(' ');
+  pushHistory();
+};
 function flashLimit(){ $("docHint").textContent=`Limit is ${LIMIT} sequences — delete one to add more.`;
   setTimeout(()=>{$("docHint").textContent=defaultHint();},2600); }
 function defaultHint(){ return `${docs.length}/${LIMIT} sequences · each keeps its own structure & colors.`; }
@@ -953,6 +1693,7 @@ function renderDocList(){
   });
   $("docCount").textContent=`(${docs.length}/${LIMIT})`;
   $("docHint").textContent=defaultHint();
+  refreshComplexPickers();
 }
 function parseFasta(text){
   const lines=text.split(/\r?\n/); const recs=[]; let cur=null;
@@ -970,19 +1711,75 @@ function importFasta(text){
   saveActive(); const firstNew=docs.length; let added=0;
   for(const r of recs){ if(docs.length>=LIMIT) break; docs.push(newDoc(r.name,r.seq,r.dot)); added++; }
   if(added>0) applyDoc(firstNew);
-  persist();
+  pushHistory();
   if(recs.length>added) $("docHint").textContent=`Added ${added}; ${recs.length-added} skipped (limit ${LIMIT}).`;
 }
 function persist(){
   try{
-    const slim=docs.map(d=>({name:d.name,seq:d.seq,dot:d.dot,color:d.color,circleColor:d.circleColor,bondColor:d.bondColor,view:d.view,style:d.style}));
-    localStorage.setItem("aptarender_docs", JSON.stringify({docs:slim,active,uniform:uniform()}));
+    const slim=docs.map(d=>({name:d.name,seq:d.seq,dot:d.dot,color:d.color,circleColor:d.circleColor,bondColor:d.bondColor,offset:d.offset,view:d.view,style:d.style}));
+    const slimCx=complexes.map(c=>({name:c.name,docA:c.docA,docB:c.docB,region:c.region,offsetA:c.offsetA,offsetB:c.offsetB,view:c.view}));
+    localStorage.setItem("aptarender_docs", JSON.stringify({docs:slim,active,uniform:uniform(),complexes:slimCx}));
   }catch(e){}
 }
-function touch(){ if(active>=0){ saveActive(); persist(); } }   // capture per-doc edits
+
+/* ---------- undo / redo ----------
+   History is a stack of full {docs, active, complexes, cmActive, cmIdx} snapshots, not a diff/patch
+   log — simplest to get right, at the cost of some memory for very long sessions (capped at
+   HISTORY_LIMIT). Every place that used to call persist() after a real edit now calls pushHistory()
+   instead (pushHistory persists too) — EXCEPT switchDoc() and beforeunload, which are deliberately
+   NOT undo points: switching which sequence you're looking at isn't an edit, and it would be
+   confusing for Ctrl+Z to silently jump you to a different tab instead of undoing your last change. */
+let history=[], histIndex=-1, restoringHistory=false;
+const HISTORY_LIMIT=100;
+function snapshotState(){
+  if(CM.active) saveActiveComplex(); else saveActive();
+  return JSON.stringify({
+    docs: docs.map(d=>({...d, color:(d.color||[]).slice(), circleColor:{...d.circleColor}, bondColor:{...d.bondColor},
+      offset:d.offset?{x:d.offset.x.slice(),y:d.offset.y.slice()}:null,
+      view:d.view?{...d.view}:null, style:d.style?JSON.parse(JSON.stringify(d.style)):null})),
+    active,
+    complexes: complexes.map(c=>({...c, region:{...c.region},
+      offsetA:c.offsetA?{x:c.offsetA.x.slice(),y:c.offsetA.y.slice()}:null,
+      offsetB:c.offsetB?{x:c.offsetB.x.slice(),y:c.offsetB.y.slice()}:null,
+      view:c.view?{...c.view}:null})),
+    cmActive:CM.active, cmIdx:CM.idx,
+  });
+}
+function pushHistory(){
+  if(restoringHistory) return;
+  const snap=snapshotState();
+  if(histIndex>=0 && history[histIndex]===snap) return;    // no real change since last snapshot
+  history=history.slice(0,histIndex+1);                     // drop any redo branch
+  history.push(snap);
+  histIndex=history.length-1;
+  if(history.length>HISTORY_LIMIT){ history.shift(); histIndex--; }
+  persist();
+  updateHistButtons();
+}
+function applyHistorySnapshot(snap){
+  restoringHistory=true;
+  try{
+    const st=JSON.parse(snap);
+    docs=st.docs.map(d=>Object.assign(newDoc(),d));
+    active=Math.min(Math.max(0,st.active|0), docs.length-1);
+    complexes=(st.complexes||[]).map(c=>({...newComplex(),...c}));
+    if(st.cmActive && complexes[st.cmIdx]) openComplex(st.cmIdx);
+    else { CM.active=false; applyDoc(active); }
+    renderDocList(); renderComplexList();
+    persist();
+  } finally { restoringHistory=false; }
+}
+function undo(){ if(histIndex<=0) return; histIndex--; applyHistorySnapshot(history[histIndex]); updateHistButtons(); }
+function redo(){ if(histIndex>=history.length-1) return; histIndex++; applyHistorySnapshot(history[histIndex]); updateHistButtons(); }
+function updateHistButtons(){
+  $("undoBtn").disabled = histIndex<=0;
+  $("redoBtn").disabled = histIndex>=history.length-1;
+}
+
+function touch(){ pushHistory(); }   // capture per-doc / per-complex edits
 function renderActiveFromBoxes(){          // Render button / examples
   if(active<0){ addDoc($("seq").value,$("dot").value); return; }
-  build(); saveActive(); renderDocList(); persist();
+  build(); saveActive(); renderDocList(); pushHistory();
 }
 
 /* ---------- wire up controls ---------- */
@@ -992,27 +1789,85 @@ $("importBtn").onclick=()=>$("fastaFile").click();
 $("fastaFile").onchange=async e=>{ const f=e.target.files[0]; if(!f) return;
   try{ importFasta(await f.text()); }catch(err){ $("docHint").textContent="Could not read that file."; }
   e.target.value=""; };
-$("uniformStyle").onchange=()=>{ if(!uniform()){ const s=readStyle(); docs.forEach(d=>d.style=s); } persist(); };
+$("uniformStyle").onchange=()=>{ if(!uniform()){ const s=readStyle(); docs.forEach(d=>d.style=s); } pushHistory(); };
 window.addEventListener("beforeunload",()=>{ saveActive(); persist(); });
 $("seq").oninput=saveInput; $("dot").oninput=saveInput;
 $("clear").onclick=()=>{                  // blank the active sequence (keeps it in the list)
   $("seq").value=""; $("dot").value=""; $("err").textContent="";
   if(active>=0){ const d=docs[active]; d.seq=""; d.dot=""; d.color=[]; d.circleColor={}; d.bondColor={}; d.view=null; }
-  blankCanvas(); renderDocList(); persist(); $("seq").focus();
+  blankCanvas(); renderDocList(); pushHistory(); $("seq").focus();
 };
 $("font").oninput=e=>{M.font=+e.target.value; $("fontVal").textContent=M.font+" px"; render();};
 $("rot").oninput=e=>{M.rot=+e.target.value; $("rotVal").textContent=M.rot+"°"; render();};
 $("reset0").onclick=()=>{M.rot=0;$("rot").value=0;$("rotVal").textContent="0°";render();};
 $("fit").onclick=fit;
-$("applyId").onclick=()=>{applyPalette(); touch();};
-$("mono").onclick=()=>{monochrome(); touch();};
-$("applySel").onclick=()=>{const c=$("selColor").value; M.selected.forEach(i=>M.color[i]=c); render(); touch();};
-$("applySelCircle").onclick=()=>{const c=$("selCircleColor").value; M.selected.forEach(i=>M.circleColor[i]=c); render(); touch();};
-$("resetCircle").onclick=()=>{M.circleColor={}; render(); touch();};
+$("resetPositions").onclick=()=>{
+  if(CM.active){ CM.offXA.fill(0); CM.offYA.fill(0); CM.offXB.fill(0); CM.offYB.fill(0); }
+  else { M.offX.fill(0); M.offY.fill(0); }
+  render(); touch();
+};
+$("undoBtn").onclick=undo;
+$("redoBtn").onclick=redo;
+window.addEventListener("keydown",e=>{
+  const tag=(document.activeElement && document.activeElement.tagName)||"";
+  if(tag==="TEXTAREA"||tag==="INPUT") return;   // let native undo work while typing
+  const k=e.key.toLowerCase();
+  if((e.ctrlKey||e.metaKey) && !e.shiftKey && k==='z'){ e.preventDefault(); undo(); }
+  else if((e.ctrlKey||e.metaKey) && (k==='y' || (e.shiftKey && k==='z'))){ e.preventDefault(); redo(); }
+});
+$("applyId").onclick=()=>{
+  for(const id of ['A','U','T','G','C']) M.palette[id]=document.querySelector(`input[data-id=${id}]`).value;
+  if(CM.active){
+    const cx=complexes[CM.idx], docA=docs[cx.docA], docB=docs[cx.docB];
+    for(let i=0;i<CM.nA;i++) docA.color[i]=M.palette[CM.seqA[i]]||"#c8cdd6";
+    for(let i=0;i<CM.nB;i++) docB.color[i]=M.palette[CM.seqB[i]]||"#c8cdd6";
+    render();
+  } else applyPalette();
+  touch();
+};
+$("mono").onclick=()=>{
+  const c=$("monoColor").value;
+  if(CM.active){
+    const cx=complexes[CM.idx], docA=docs[cx.docA], docB=docs[cx.docB];
+    for(let i=0;i<CM.nA;i++) docA.color[i]=c;
+    for(let i=0;i<CM.nB;i++) docB.color[i]=c;
+    render();
+  } else monochrome();
+  touch();
+};
+$("applySel").onclick=()=>{
+  const c=$("selColor").value;
+  if(CM.active){
+    const cx=complexes[CM.idx], docA=docs[cx.docA], docB=docs[cx.docB];
+    CM.selA.forEach(i=>docA.color[i]=c); CM.selB.forEach(i=>docB.color[i]=c);
+  } else M.selected.forEach(i=>M.color[i]=c);
+  render(); touch();
+};
+$("applySelCircle").onclick=()=>{
+  const c=$("selCircleColor").value;
+  if(CM.active){
+    const cx=complexes[CM.idx], docA=docs[cx.docA], docB=docs[cx.docB];
+    CM.selA.forEach(i=>docA.circleColor[i]=c); CM.selB.forEach(i=>docB.circleColor[i]=c);
+  } else M.selected.forEach(i=>M.circleColor[i]=c);
+  render(); touch();
+};
+$("resetCircle").onclick=()=>{
+  if(CM.active){ const cx=complexes[CM.idx]; docs[cx.docA].circleColor={}; docs[cx.docB].circleColor={}; }
+  else M.circleColor={};
+  render(); touch();
+};
 $("selCircleColor").oninput=()=>{};
-$("selAll").onclick=()=>{M.selected.clear();for(let i=0;i<M.n;i++)M.selected.add(i);updateSelInfo();render();};
-$("selNone").onclick=()=>{M.selected.clear();updateSelInfo();render();};
-// H-bonds
+$("selAll").onclick=()=>{
+  if(CM.active){ CM.selA.clear();CM.selB.clear();
+    for(let i=0;i<CM.nA;i++)CM.selA.add(i); for(let i=0;i<CM.nB;i++)CM.selB.add(i);
+    updateSelInfo(); render(); return; }
+  M.selected.clear();for(let i=0;i<M.n;i++)M.selected.add(i);updateSelInfo();render();
+};
+$("selNone").onclick=()=>{
+  if(CM.active){ CM.selA.clear(); CM.selB.clear(); updateSelInfo(); render(); return; }
+  M.selected.clear();updateSelInfo();render();
+};
+// H-bonds (single-sequence mode only — complexes don't support per-bond click-select in this version)
 $("applyBond").onclick=()=>{const c=$("bondColor").value; M.selBond.forEach(i=>M.bondColor[i]=c); render(); touch();};
 $("bondAll").onclick=()=>{M.selBond.clear();for(let i=0;i<M.n;i++)if(M.pt[i]>i)M.selBond.add(i);updateBondInfo();render();};
 $("bondReset").onclick=()=>{M.bondColor={};M.selBond.clear();updateBondInfo();render(); touch();};
@@ -1024,6 +1879,7 @@ $("frameColor").oninput=render; $("fillColor").oninput=render;
 $("frameW").oninput=e=>{$("frameWVal").textContent=e.target.value+" px"; render();};
 $("monoColor").oninput=()=>{};
 $("backColor").oninput=render; $("pairColor").oninput=render;
+$("dupColor").oninput=render;
 $("pngScale").oninput=updateExportInfo;
 $("bgColor").oninput=e=>{$("stage").style.background=e.target.value; render();};
 document.querySelectorAll("input[data-id]").forEach(inp=>inp.oninput=()=>{ M.palette[inp.dataset.id]=inp.value; render(); });
@@ -1041,16 +1897,53 @@ $("ex2").onclick=()=>{                 // three-way multiloop
 };
 
 /* tabs (top navigator) */
-const SEL_TABS=new Set(['letters','circles']);   // panes where base-selection controls matter
+const SEL_TABS=new Set(['letters','circles','complex']);   // panes where base-selection controls matter
 document.querySelectorAll('#tabs .tab').forEach(btn=>{
   btn.onclick=()=>{
     const tab=btn.dataset.tab;
     document.querySelectorAll('#tabs .tab').forEach(b=>b.classList.toggle('active', b===btn));
     document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('active', p.dataset.pane===tab));
     $("selbar").style.display = SEL_TABS.has(tab) ? 'flex' : 'none';
+    if(tab==='complex'){ refreshComplexPickers(); renderComplexList(); }
   };
 });
 $("selbar").style.display='none';   // hidden on the Input tab at start
+
+/* panel resize (drag the divider between #panel and #stage) */
+(function panelResizeInit(){
+  const handle=$("panelResize"), panel=$("panel");
+  let dragging=false, startX=0, startW=0;
+  function clampWidth(w){
+    const min=200, max=Math.round(window.innerWidth*0.8);
+    return Math.max(min, Math.min(max, w));
+  }
+  function applyWidth(w){
+    panel.style.width=w+"px";
+  }
+  try{
+    const savedW=parseInt(localStorage.getItem("aptarender_panelw")||"",10);
+    if(!isNaN(savedW)) applyWidth(clampWidth(savedW));
+  }catch(e){}
+  handle.addEventListener("mousedown",(e)=>{
+    dragging=true; startX=e.clientX; startW=panel.getBoundingClientRect().width;
+    handle.classList.add("dragging");
+    document.body.classList.add("resizing-panel");
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove",(e)=>{
+    if(!dragging) return;
+    const w=clampWidth(startW+(e.clientX-startX));
+    applyWidth(w);
+  });
+  window.addEventListener("mouseup",()=>{
+    if(!dragging) return;
+    dragging=false;
+    handle.classList.remove("dragging");
+    document.body.classList.remove("resizing-panel");
+    try{ localStorage.setItem("aptarender_panelw", String(Math.round(panel.getBoundingClientRect().width))); }catch(e){}
+    if(M.n||CM.active) fit();
+  });
+})();
 
 /* initial */
 window.addEventListener("resize",()=>{ if(M.n) render(); });
@@ -1062,6 +1955,7 @@ $("stage").style.background=$("bgColor").value;
     docs=saved.docs.map(d=>Object.assign(newDoc(),d));
     if(typeof saved.uniform==='boolean') $("uniformStyle").checked=saved.uniform;
     active=Math.min(Math.max(0,saved.active|0),docs.length-1);
+    complexes=(saved.complexes||[]).map(c=>({...newComplex(),...c}));
     applyDoc(active);
   } else {
     // migrate old single-seq storage, else load the demo
@@ -1071,7 +1965,8 @@ $("stage").style.background=$("bgColor").value;
     else { docs=[newDoc('seq 1',"GGGCAGCUUCGGCUGCCCAAAA","(((((((...))))))).....")]; }
     active=0; applyDoc(0); persist();
   }
-  renderDocList();
+  renderDocList(); renderComplexList();
+  history=[snapshotState()]; histIndex=0; updateHistButtons();   // seed the undo baseline
 })();
 </script>
 </body>
