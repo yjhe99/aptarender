@@ -2,6 +2,65 @@
 
 All notable changes to AptaRender. Newest first.
 
+## 2026-10-02
+- **Box select & parts:** Shift+drag on the background draws a selection box.
+  Ctrl/⌘+click a base to select its *part* — the helix it belongs to, the loop ring it sits
+  in, or its free 5′/3′ end — and Ctrl/⌘+drag to move just that part. Dragging any selected
+  base now moves the whole selection.
+- **Rotate selection** (Layout tab): rotate the selected bases by a set number of degrees,
+  either about the point where they attach to the rest of the structure (e.g. a stem's base
+  pair) or about their own center. Undoable.
+- **Zoom to selection:** new **Zoom** button in the selection bar centers and zooms the
+  canvas on the selected bases.
+- **Complex view now shows position numbering and dashed non-WC rungs**, same as a single
+  sequence.
+- **Fixed:** side-by-side complexes turned back into Replace complexes after a reload.
+- **Fixed:** with "Uniform style" on (the default), style changes weren't saved across
+  reloads and couldn't be undone.
+- **Fixed:** font size, rotation, frame width, numbering and every color picker now record
+  an undo step and are saved.
+- **Fixed:** recoloring bases in a complex could be silently reverted after building
+  another complex, adding/importing sequences, or switching sequences.
+- **Fixed:** clicking the current sequence while a complex is open now returns to it.
+- **Fixed:** Ctrl+Z didn't work right after moving a slider or color picker.
+- Internal: the separate single-sequence and complex drawing/export code paths were merged
+  into one, so the two views can't drift apart again.
+
+## 2026-09-30
+- **Fixed — "L-shape" and "Perpendicular" tail styles doing nothing in Complex mode:** a
+  flank (whatever's left of a strand beyond a duplex end) was always re-oriented to
+  continue straight out from the duplex before anything else was tried, no matter which
+  tail style was selected — so a flank governed only by tailMode (no surviving structure of
+  its own) always ended up flattened back onto the duplex axis, silently discarding any
+  perpendicular turn or L-corner. Both styles now actually turn away from the duplex (with
+  the existing collision-avoidance search still free to pick whichever side clears the rest
+  of the drawing). Also fixed the same styles being backwards for a **5′ flank** specifically
+  (the one whose duplex-adjacent base is the *last* base in that stretch, not the first) —
+  the "one bond straight, then turn" shape was being built from the wrong end, putting the
+  corner at the free tip instead of at the duplex. Verified on both Replace and Side-by-side
+  Complex modes, and on flanks attached at either end of a duplex.
+- **Fixed — long sequences overlapping into a closed circle instead of a bigger one:** the
+  "Natural" tail style drew every unpaired run on a fixed-size arc, so past ~19 bases the
+  arc wrapped past a full turn and later bases landed back on top of earlier ones. The arc
+  now widens to keep spacing correct at any length — verified out to 300 nt with no
+  overlap and exact-length backbone steps throughout. Affects both a fully-unpaired
+  sequence and a long free tail hanging off a real stem.
+- **Fixed — "L-shape" and "Perpendicular" tail styles doing nothing for a fully-unpaired
+  sequence:** those two styles silently fell back to a plain straight line when there was
+  no base pair anywhere in the structure to take a direction from. They now get their own
+  distinct shape in that case too, matching how they already behaved for a tail attached to
+  a real stem.
+- **Non-Watson-Crick base pairs:** the structure box now accepts `[ ]` and `{ }` as pair
+  brackets alongside `( )` — no more hand-editing a non-WC pair into parentheses just to
+  render it. Any pair written with `[ ]`/`{ }` is drawn as a **dashed** rung instead of
+  solid, so WC and non-WC pairs are visually distinct at a glance (single-sequence mode;
+  not yet wired into Complex mode's rungs). Mismatched bracket types (e.g. `[` closed with
+  `)`) now get a specific error message.
+- **Manual numbering offset:** a new **Start numbering at** field next to **Number every**
+  (Lines tab) shifts the displayed position numbers by a constant — e.g. start counting at
+  101 to match a plasmid/genomic numbering convention — without touching the sequence
+  itself. Persists like the other style settings.
+
 ## 2026-09-27
 - **Two-strand hybridization ("Build a Complex", Feature #4):** display two sequences on
   one canvas and manually set a partial hetero-duplex region between them. New **Complex**

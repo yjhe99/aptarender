@@ -129,6 +129,7 @@
       <span id="selInfo">none selected</span>
       <button class="mini" id="selAll">Select all</button>
       <button class="mini" id="selNone">Clear</button>
+      <button class="mini" id="zoomSel" title="Center and zoom the canvas on the selected bases">Zoom</button>
     </div>
   </div>
 
@@ -149,7 +150,7 @@
       <h2>Active sequence &amp; structure</h2>
       <label>Sequence (A/U/T/G/C)</label>
       <textarea id="seq" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
-      <label>Dot-bracket structure</label>
+      <label>Dot-bracket structure — ( ) for Watson-Crick pairs; [ ] or { } for non-WC pairs (drawn dashed)</label>
       <textarea id="dot" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
       <div class="row" style="margin-top:9px">
         <button class="primary" id="render">Render</button>
@@ -159,7 +160,7 @@
       </div>
       <div id="err"></div>
       <div class="hint">Use nested <code>( )</code> and <code>.</code> for the structure.
-        Drag the background to pan, scroll to zoom, drag a base to reposition its branch.</div>
+        Drag the background to pan, Shift+drag to box-select, scroll to zoom, drag a base to reposition its branch.</div>
     </div>
   </section>
 
@@ -176,17 +177,37 @@
     </div>
     <div class="grp">
       <h2>Manual positions</h2>
-      <div class="hint" style="margin-top:0">Drag a base on the canvas to move its whole stem/loop
-        branch; Alt+drag moves just that one base.</div>
+      <div class="hint" style="margin-top:0">
+        <b>Drag</b> a base: move its whole branch (the stem and everything it encloses).<br>
+        <b>Alt+drag</b>: move just that one base.<br>
+        <b>Ctrl/⌘+drag</b>: move just its <i>part</i> — the helix it's in, the loop ring, or the free end.<br>
+        <b>Ctrl/⌘+click</b>: add that part to the selection. <b>Shift+drag</b> the background: box-select.<br>
+        Dragging any selected base moves the whole selection.</div>
       <div class="row" style="margin-top:8px">
         <button class="mini" id="resetPositions">Reset all positions</button>
       </div>
     </div>
     <div class="grp">
+      <h2>Rotate selection</h2>
+      <div class="row">
+        <input type="number" id="rotSelDeg" value="15" step="5" style="flex:0 0 64px">
+        <span style="flex:0 0 auto;color:var(--muted);font-size:11px">° (+ = clockwise)</span>
+      </div>
+      <label>Pivot</label>
+      <select id="rotSelPivot">
+        <option value="attach">Attachment point (where the part joins the rest)</option>
+        <option value="centroid">Center of the selection</option>
+      </select>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="rotSelGo">Rotate selected</button>
+      </div>
+      <div class="hint" id="rotSelInfo"></div>
+    </div>
+    <div class="grp">
       <h2>Free tails</h2>
       <label>Free 5′/3′ tails (unpaired ends)</label>
       <select id="tailMode">
-        <option value="natural">Natural (default layout)</option>
+        <option value="natural">Natural (gentle curve)</option>
         <option value="flatten">Flatten (straight)</option>
         <option value="L">L-shape (90° corner)</option>
         <option value="perp">Perpendicular (90° out)</option>
@@ -301,6 +322,10 @@
         <span style="width:auto;font-weight:400;color:var(--muted);font-size:11px">Number every</span>
         <input type="number" id="numEvery" min="0" value="0"> <span style="width:auto;color:var(--muted);font-size:11px">nt (0=off)</span>
       </div>
+      <div class="idrow" style="margin-top:6px">
+        <span style="width:auto;font-weight:400;color:var(--muted);font-size:11px">Start numbering at</span>
+        <input type="number" id="numOffset" value="1"> <span style="width:auto;color:var(--muted);font-size:11px">(shifts displayed numbers only — sequence is untouched)</span>
+      </div>
     </div>
   </section>
 
@@ -403,7 +428,7 @@ const $=id=>document.getElementById(id);
 const M = {
   seq:"", n:0,
   pt:[],          // nested () pair table, -1 if unpaired
-  pkPairs:[],     // [ [i,j], ... ] pseudoknot pairs
+  nonWC:[],       // true at a pair's lower index when written [ ] / { } / < > instead of ( )
   x:[], y:[],     // model coords (px units) — the auto-layout baseline, untouched by dragging
   offX:[], offY:[], // per-base manual drag offsets (px, model space), added on top of x/y at render time.
                      // KNOWN LIMITATION: these don't get renormalized if computeLayout reruns (font/tail-mode
@@ -420,21 +445,21 @@ const M = {
 };
 
 /* ---------- complex model (Feature #4: two-strand hybridization) ----------
-   Deliberately kept SEPARATE from M rather than generalizing M to N strands —
-   this is the single biggest scope decision here: it means single/multi-sequence
-   mode (M, docs[]) is completely untouched by any of this, at the cost of some
-   duplicated rendering code between render()/renderComplex() and friends.
+   Deliberately kept SEPARATE from M rather than generalizing M to N strands, so
+   single/multi-sequence mode (M, docs[]) is untouched by any of this. The drawing,
+   export, drag and selection code does NOT duplicate per mode, though: it all goes
+   through strands() (see below), which presents M or CM as a list of strands.
    Colors/circleColor/bondColor for each strand are NOT duplicated here — they're
    read straight from docs[complexes[idx].docA/.docB] at render time, so any
    per-base coloring you already did in single-sequence mode carries over. */
 const CM = {
   active:false, idx:-1,
-  seqA:"", nA:0, ptA:[], xA:[], yA:[], offXA:[], offYA:[], selA:new Set(),
-  seqB:"", nB:0, ptB:[], xB:[], yB:[], offXB:[], offYB:[], selB:new Set(),
+  seqA:"", nA:0, ptA:[], nonWCA:[], xA:[], yA:[], offXA:[], offYA:[], selA:new Set(),
+  seqB:"", nB:0, ptB:[], nonWCB:[], xB:[], yB:[], offXB:[], offYB:[], selB:new Set(),
   dupLen:0,
 };
 
-/* ---------- parse dot-bracket (with pseudoknots) ---------- */
+/* ---------- parse dot-bracket (nested pairs; ( ) = WC, [ ] { } < > = non-WC) ---------- */
 const OPEN={'(':')','[':']','{':'}','<':'>'};
 const CLOSE={')':'(',']':'[','}':'{','>':'<'};
 function parseStructure(seq, dot){
@@ -448,21 +473,28 @@ function parseStructure(seq, dot){
   if(bad) throw `Unexpected character "${bad[0]}" in sequence (allowed: A U T G C N).`;
   const n=dot.length;
   const pt=new Array(n).fill(-1);
+  // nonWC[i] is set on the LOWER index of a pair when it was written with [ ], { }, or < >
+  // instead of ( ) — a plain, low-friction way to mark a non-Watson-Crick pair without
+  // having to keep a separate annotation file. These still have to nest properly (no
+  // crossing) like ( ) does — true crossing pseudoknots aren't supported by the layout.
+  const nonWC=new Array(n).fill(false);
   const stack=[];
   for(let i=0;i<n;i++){
     const c=dot[i];
     if(c==='.'||c==='-'||c===':'||c===','){continue;}
-    else if(c==='('){ stack.push(i); }
-    else if(c===')'){
-      if(stack.length===0) throw `Unbalanced ")" at position ${i+1}.`;
-      const j=stack.pop(); pt[i]=j; pt[j]=i;
+    else if(OPEN[c]!==undefined){ stack.push({i,c}); }
+    else if(CLOSE[c]!==undefined){
+      if(stack.length===0) throw `Unbalanced "${c}" at position ${i+1}.`;
+      const top=stack.pop();
+      if(OPEN[top.c]!==c)
+        throw `Mismatched bracket: "${top.c}" opened at position ${top.i+1} but closed with "${c}" at position ${i+1} — use the same bracket type on both ends.`;
+      pt[i]=top.i; pt[top.i]=i;
+      if(c!==')') nonWC[top.i]=true;
     }
-    else if('[]{}<>'.includes(c))
-      throw `Pseudoknot bracket "${c}" at position ${i+1} — only nested ( ) . are supported for now.`;
-    else throw `Unexpected character "${c}" in structure at position ${i+1}.`;
+    else throw `Unexpected character "${c}" in structure at position ${i+1} (allowed: ( ) [ ] { } < > .).`;
   }
-  if(stack.length) throw `Unbalanced "(" — ${stack.length} left open.`;
-  return {seq,n,pt,pk:[]};
+  if(stack.length){ const top=stack[stack.length-1]; throw `Unbalanced "${top.c}" at position ${top.i+1} — ${stack.length} left open.`; }
+  return {seq,n,pt,nonWC};
 }
 
 /* ---------- radial layout (our own) ---------- */
@@ -538,29 +570,76 @@ function computeLayout(n, pt, S, tailMode){
     if(pt[k]===-1){ items.push({t:'b',i:k}); k++; }
     else { items.push({t:'p',a:k,b:pt[k]}); k=pt[k]+1; }
   }
-  let curX=0, curY=0;
+  // A stem+loop is a U-turn: sequence-wise, base 'a' walks OUT along the near rail, the
+  // loop turns around, and base 'b' walks back IN along the far rail, ending back at
+  // essentially the same spot 'a' started from — not off past the loop. So whatever comes
+  // right after 'b' in sequence must resume from where 'b' physically is, heading back the
+  // way we came, not jump to the loop's farthest visual reach (that was the earlier bug:
+  // it produced a long, wrong backbone line straight across the whole structure). Track
+  // the current direction of travel and flip it every time we pass through a branch.
+  let curX=0, curY=0, dirX=1, dirY=0;
   for(const it of items){
     if(it.t==='b'){
       x[it.i]=curX; y[it.i]=curY;
-      curX+=S;
+      curX+=dirX*S; curY+=dirY*S;
     } else {
       x[it.a]=curX;  y[it.a]=curY;
-      x[it.b]=curX;  y[it.b]=curY+S;         // opposite rail starts one rung-width over
-      // force buildStem's outward direction to be +x (continue forward, no turn) by
-      // handing it a "center" that sits one step to the left of the rung midpoint
-      buildStem(it.a, it.b, curX-1, curY+S/2);
-      let maxX=curX;
-      for(let idx=it.a; idx<=it.b; idx++) if(x[idx]>maxX) maxX=x[idx];
-      curX=maxX+S;                           // resume the backbone past the whole branch
-      // curY is left as-is (the pre-stem baseline), so the backbone after the branch
-      // lines back up with the branch's near rail rather than its far one.
+      const perpX=-dirY, perpY=dirX;
+      x[it.b]=curX+perpX*S;  y[it.b]=curY+perpY*S;   // opposite rail starts one rung-width over
+      // force buildStem's outward direction to continue along (dirX,dirY) — no turn — by
+      // handing it a "center" one step behind the RUNG'S MIDPOINT (not just 'a's own
+      // position — a and b generally aren't at the same y, so the midpoint isn't either)
+      const midX=(x[it.a]+x[it.b])/2, midY=(y[it.a]+y[it.b])/2;
+      buildStem(it.a, it.b, midX-dirX, midY-dirY);
+      dirX=-dirX; dirY=-dirY;                        // the U-turn: we're now heading back
+      curX=x[it.b]+dirX*S; curY=y[it.b]+dirY*S;      // resume right where 'b' ended up
     }
   }
 
-  // ---- optionally reshape the free 5'/3' tails ----
-  if(tailMode && tailMode!=='natural'){
-    if(!pt.some(v=>v!==-1)){                          // no stem at all → linearize the whole strand
-      for(let i=0;i<n;i++){ x[i]=i*S; y[i]=0; }
+  // ---- reshape the free 5'/3' tails per the chosen style ----
+  // The exterior-level layout above always produces a straight backbone by default (that
+  // part is structural, not a style choice — see the comment above it). What style each
+  // free tail actually gets drawn in — a gentle curve, dead straight, or a hard corner —
+  // is chosen here, same as it always was. "Natural" now does real work again: it used to
+  // be indistinguishable from "Flatten" (both just left the already-straight default in
+  // place), which is not what the curved/arc look it's named for should mean.
+  // Radius for the 'natural' gentle arc. A fixed radius (the old behavior) is fine for a
+  // normal-length tail, but for a LONG run it makes the arc wrap back past a full turn and
+  // reuse the same circle over and over, so far-apart bases in sequence land on top of each
+  // other instead of the arc simply growing — that's the "long sequence overlaps in a circle
+  // instead of making a bigger circle" bug. Cap the total sweep angle instead: below the cap,
+  // radius stays at the old default (unchanged look for typical tails); above it, the radius
+  // grows just enough to keep the same cap, so the arc widens rather than closing on itself.
+  const naturalArcRadius=(count)=>{
+    const maxSweep=2.6;                    // radians (~150°) — stays open, never a closed loop
+    let Rc=S*3, astep=2*Math.asin(Math.min(0.999, S/(2*Rc)));
+    if(count>1 && astep*(count-1)>maxSweep){
+      astep=maxSweep/(count-1);
+      Rc=S/(2*Math.sin(astep/2));
+    }
+    return {Rc,astep};
+  };
+  if(tailMode){
+    if(!pt.some(v=>v!==-1)){                          // no stem at all anywhere in this run
+      if(n>1 && (tailMode==='natural'||tailMode==='perp'||tailMode==='L')){
+        // no paired base to take a tangent/side from here — use the default heading (+x, from
+        // the straight layout above) and turn upward, consistently across all three styles.
+        const fx=1,fy=0, px=0,py=1;
+        if(tailMode==='natural'){
+          const {Rc,astep}=naturalArcRadius(n);
+          for(let i=0;i<n;i++){ x[i]=Rc*Math.sin(astep*i); y[i]=Rc*(1-Math.cos(astep*i)); }
+        } else if(tailMode==='perp'){
+          for(let i=0;i<n;i++){ x[i]=px*S*i; y[i]=py*S*i; }
+        } else { // 'L'
+          for(let i=0;i<n;i++){
+            if(i===0){ x[i]=0; y[i]=0; }
+            else if(i===1){ x[i]=fx*S; y[i]=fy*S; }
+            else { x[i]=fx*S+px*S*(i-1); y[i]=fy*S+py*S*(i-1); }
+          }
+        }
+      } else {
+        for(let i=0;i<n;i++){ x[i]=i*S; y[i]=0; }
+      }
       return {x,y};
     }
     let cx=0,cy=0; for(let i=0;i<n;i++){cx+=x[i];cy+=y[i];} cx/=n; cy/=n;
@@ -584,9 +663,28 @@ function computeLayout(n, pt, S, tailMode){
         if(rl>1e-6){ px=rx/rl; py=ry/rl; }
       }
       if(px===undefined) [px,py]=perpOut(fx,fy,x[anchor],y[anchor]);   // fallback
+      // 'natural' arc parameters: an evenly-spaced (chord length S) circular arc that starts
+      // tangent to the incoming direction (fx,fy) and curves toward the SAME side (px,py)
+      // that 'perp'/'L' turn toward — just gradually instead of a hard corner. The radius is
+      // deliberately large (3 spacing units) so it reads as a gentle bend and can't wrap the
+      // tail back around on itself or toward the rest of the structure.
+      let acx,acy,avx,avy,astep,asign;
+      if(tailMode==='natural'){
+        const {Rc}=naturalArcRadius(count);
+        acx=x[anchor]+px*Rc; acy=y[anchor]+py*Rc;
+        avx=x[anchor]-acx;   avy=y[anchor]-acy;
+        astep=2*Math.asin(Math.min(0.999, S/(2*Rc)));
+        const ca=Math.cos(astep), sa=Math.sin(astep);
+        const tX=acx+avx*ca-avy*sa, tY=acy+avx*sa+avy*ca;
+        asign=((tX-x[anchor])*fx+(tY-y[anchor])*fy)>=0 ? 1 : -1;
+      }
       for(let t=1;t<=count;t++){
         const idx=anchor+step*t; let X,Y;
-        if(tailMode==='flatten'){ X=x[anchor]+fx*S*t;         Y=y[anchor]+fy*S*t; }
+        if(tailMode==='natural'){
+          const ang=asign*astep*t, ca=Math.cos(ang), sa=Math.sin(ang);
+          X=acx+avx*ca-avy*sa; Y=acy+avx*sa+avy*ca;
+        }
+        else if(tailMode==='flatten'){ X=x[anchor]+fx*S*t;         Y=y[anchor]+fy*S*t; }
         else if(tailMode==='perp'){ X=x[anchor]+px*S*t;       Y=y[anchor]+py*S*t; }
         else { // 'L': one step along the helix, then a 90° turn
           if(t===1){ X=x[anchor]+fx*S;                        Y=y[anchor]+fy*S; }
@@ -605,6 +703,36 @@ function computeLayout(n, pt, S, tailMode){
 }
 
 /* ---------- two-strand complex layout (Feature #4) ---------- */
+// Shared by both complex modes: checks the 0-based inclusive ranges and returns the duplex length.
+function validateRegion({aStart,aEnd,bStart,bEnd}, nA, nB){
+  if(!(Number.isInteger(aStart)&&Number.isInteger(aEnd)&&aStart>=0&&aEnd<nA&&aStart<=aEnd))
+    throw `Invalid A range (sequence is ${nA} nt).`;
+  if(!(Number.isInteger(bStart)&&Number.isInteger(bEnd)&&bStart>=0&&bEnd<nB&&bStart<=bEnd))
+    throw `Invalid B range (sequence is ${nB} nt).`;
+  const dupLen=aEnd-aStart+1;
+  if(dupLen!==bEnd-bStart+1)
+    throw `Duplex region lengths differ: A range is ${dupLen} nt, B range is ${bEnd-bStart+1} nt.`;
+  return dupLen;
+}
+// The ONE place the mode -> layout-function dispatch lives (it used to be copy-pasted into
+// openComplex, relayoutComplex and the Build button, which is how a new mode could get wired
+// into one and forgotten in another). Parses both source docs fresh; never throws — returns
+// {error} instead so every caller can just show it.
+function layoutComplex(c){
+  if(!c) return {error:"No such complex."};
+  const docA=docs[c.docA], docB=docs[c.docB];
+  if(!docA || !docB) return {error:"One of this complex's sequences no longer exists."};
+  let pA,pB;
+  try{ pA=parseStructure(docA.seq,docA.dot); pB=parseStructure(docB.seq,docB.dot); }
+  catch(e){ return {error:"⚠ Both strands need a valid sequence+structure: "+e}; }
+  const tm=$("tailMode").value;
+  try{
+    const lay = c.mode==='side'
+      ? computeSideHybridLayout(pA.seq,pA.pt,pB.seq,pB.pt,c.region,SPACING,tm,tm)
+      : computeComplexLayout(pA.seq,pA.pt,pB.seq,pB.pt,c.region,SPACING,tm);
+    return {pA,pB,lay,docA,docB};
+  } catch(e){ return {error:"⚠ "+e}; }
+}
 // Strips any base pair that touches OR SPANS [s,e] — i.e. one endpoint inside the region
 // (a direct conflict) as well as any pair with one endpoint before s and the other after e
 // (an outer pair that would otherwise enclose the duplex region as if it were a nested loop).
@@ -650,12 +778,17 @@ function sliceFlankPT(pt, lo, hi){
 // a leftover unpaired tail from a partially-broken original pair) that shows up when a duplex region
 // only partially overlaps an existing stem. It's still a heuristic, and an unusual enough shape can
 // still come out at an angle that needs a manual nudge — that's what drag-to-reposition is for.
-function attachFlank(n, flankXY, attachLocalIdx, targetX, targetY, targetAngleDeg){
+function attachFlank(n, flankXY, attachLocalIdx, targetX, targetY, targetAngleDeg, refDegOverride){
   const {x,y}=flankXY;
   if(n===0) return {x:[],y:[]};
   const ax=x[attachLocalIdx], ay=y[attachLocalIdx];
   let refAngle=0;
-  if(n>1){
+  if(refDegOverride!==undefined && refDegOverride!==null){
+    // caller already knows the exact intended outward direction (used for a plain tail run
+    // governed only by tailMode, not by any real surviving structure) — skip the point-cloud
+    // guess entirely so that direction can't get silently overridden.
+    refAngle=refDegOverride*Math.PI/180;
+  } else if(n>1){
     let Sxx=0,Syy=0,Sxy=0;
     for(let i=0;i<n;i++){ const dx=x[i]-ax, dy=y[i]-ay; Sxx+=dx*dx; Syy+=dy*dy; Sxy+=dx*dy; }
     if(Sxx>1e-9||Syy>1e-9){
@@ -674,20 +807,98 @@ function attachFlank(n, flankXY, attachLocalIdx, targetX, targetY, targetAngleDe
   }
   return {x:outX,y:outY};
 }
+// Lay out one flank (whatever's left of a strand beyond a duplex end) and attach it so it
+// continues straight out from that end, in the SAME direction the backbone was already
+// heading — no turn, no arbitrary diagonal — connected by one normal bond length. Only
+// deviates from that straight continuation if it would otherwise land on top of something
+// already drawn (the duplex itself, the other strand, or an earlier-placed flank): then it
+// tries the smallest rotation, alternating left/right, that clears. `occupied` is the
+// running list of every point already placed; this flank's own points are appended to it
+// before returning, so later flanks avoid this one too.
+function attachFlankContinuing(local, attachLocalIdx, S, tailMode, dupEndX, dupEndY, continueDeg, occupied){
+  const n=local.length;
+  if(n===0) return {x:[],y:[]};
+  // computeLayout always builds a plain unpaired run as "one straight bond out of index 0,
+  // then whatever tailMode's corner/curve/perpendicular does" — i.e. it assumes index 0 IS
+  // the duplex-adjacent base. That's only true for a 3' flank (attachLocalIdx===0). For a 5'
+  // flank the duplex-adjacent base is the LAST local index, so run computeLayout on the
+  // reversed sequence (still valid nesting) and reverse the coordinates back, so the "one
+  // bond straight, then turn" shape is oriented from the real attach point either way —
+  // otherwise the corner/curve would sit at the free tip and the straight bond at the far end.
+  const reversed = attachLocalIdx!==0;
+  let localForLayout=local;
+  if(reversed){
+    localForLayout=new Array(n);
+    for(let i=0;i<n;i++){ const j=local[n-1-i]; localForLayout[i]=(j===-1)?-1:(n-1-j); }
+  }
+  const lay0=computeLayout(n, localForLayout, S, tailMode);
+  const lay = reversed ? {x:lay0.x.slice().reverse(), y:lay0.y.slice().reverse()} : lay0;
+
+  const CLEAR=S*0.85;
+  const tryAngles=[0, 20,-20, 40,-40, 60,-60, 80,-80, 100,-100, 120,-120, 140,-140, 160,-160, 180];
+
+  // A run with no surviving structure at all (nothing left paired after the duplex broke
+  // conflicting pairs) is governed purely by tailMode's own free-tail shape — and for
+  // 'perp'/'L' that shape is DELIBERATELY not a continuation of continueDeg (a perpendicular
+  // tail is supposed to turn 90° away; an L-shape one bond then a corner). The old code always
+  // re-oriented the whole flank's principal axis to point along continueDeg first (since that
+  // angle essentially never collides with anything, the search locked onto it immediately) —
+  // which for a straight/perpendicular run just flattens it back out, silently discarding the
+  // turn. That was the "Perpendicular/L-shape does nothing in Complex mode" bug. Build a
+  // richer candidate list instead: the flank's own real first-bond direction (out of the
+  // attach point) as the alignment reference, at the target angle(s) that actually correspond
+  // to what that tail style means, plus a mirrored version so the search can still pick
+  // whichever side (up/down relative to the duplex) clears the rest of the drawing.
+  const hasStructure = local.some(v=>v!==-1);
+  let candidates;
+  if(!hasStructure && n>1 && (tailMode==='perp'||tailMode==='L')){
+    const adjIdx = attachLocalIdx===0 ? 1 : attachLocalIdx-1;
+    const fdx=lay.x[adjIdx]-lay.x[attachLocalIdx], fdy=lay.y[adjIdx]-lay.y[attachLocalIdx];
+    const localDeg=Math.atan2(fdy,fdx)*180/Math.PI;
+    const ay0=lay.y[attachLocalIdx];
+    const flipped={x:lay.x, y:lay.y.map(v=>2*ay0-v)};        // mirror the corner/turn to the other side
+    if(tailMode==='perp'){
+      candidates=[
+        {targetDeg:continueDeg+90, lay, refDeg:localDeg},
+        {targetDeg:continueDeg-90, lay, refDeg:localDeg},
+      ];
+    } else {                                                 // 'L'
+      candidates=[
+        {targetDeg:continueDeg, lay,        refDeg:localDeg},
+        {targetDeg:continueDeg, lay:flipped, refDeg:localDeg},
+      ];
+    }
+  } else {
+    candidates=[{targetDeg:continueDeg, lay, refDeg:null}];  // unchanged: principal-axis heuristic
+  }
+
+  let best=null, bestMinD=-Infinity;
+  outer:
+  for(const cand of candidates){
+    for(const d of tryAngles){
+      const ang=cand.targetDeg+d;
+      const rad=ang*Math.PI/180;
+      const tX=dupEndX+Math.cos(rad)*S, tY=dupEndY+Math.sin(rad)*S;   // one normal bond away, not R+S
+      const at=attachFlank(n, cand.lay, attachLocalIdx, tX, tY, ang, cand.refDeg);
+      let minD=Infinity;
+      for(let i=0;i<n && minD>0;i++) for(const o of occupied){
+        const dd=Math.hypot(at.x[i]-o.x, at.y[i]-o.y);
+        if(dd<minD) minD=dd;
+      }
+      if(minD>=CLEAR){ best=at; bestMinD=minD; break outer; }   // first (= least-rotated) clean option wins
+      if(minD>bestMinD){ bestMinD=minD; best=at; }              // otherwise keep the least-bad fallback
+    }
+  }
+  for(let i=0;i<n;i++) occupied.push({x:best.x[i], y:best.y[i]});
+  return best;
+}
 // The whole two-strand layout: duplex ladder in the middle, each of the up-to-four flanks laid
 // out independently via the SAME computeLayout used for single sequences, then stitched onto the
 // matching duplex end. Throws on bad ranges/length mismatch; returns {broken} so the caller can
 // tell the user how many pre-existing pairs got broken to make room for the duplex.
 function computeComplexLayout(seqA, ptAOrig, seqB, ptBOrig, region, S, tailMode){
   const {aStart,aEnd,bStart,bEnd}=region;
-  const nA=seqA.length, nB=seqB.length;
-  if(!(Number.isInteger(aStart)&&Number.isInteger(aEnd)&&aStart>=0&&aEnd<nA&&aStart<=aEnd))
-    throw `Invalid A range (sequence is ${nA} nt).`;
-  if(!(Number.isInteger(bStart)&&Number.isInteger(bEnd)&&bStart>=0&&bEnd<nB&&bStart<=bEnd))
-    throw `Invalid B range (sequence is ${nB} nt).`;
-  const dupLen=aEnd-aStart+1;
-  if(dupLen!==bEnd-bStart+1)
-    throw `Duplex region lengths differ: A range is ${dupLen} nt, B range is ${bEnd-bStart+1} nt.`;
+  const nA=seqA.length, nB=seqB.length, dupLen=validateRegion(region,nA,nB);
 
   const broken=countBrokenForDuplex(ptAOrig,aStart,aEnd)+countBrokenForDuplex(ptBOrig,bStart,bEnd);
   const ptA=breakForDuplex(ptAOrig,aStart,aEnd), ptB=breakForDuplex(ptBOrig,bStart,bEnd);
@@ -698,26 +909,30 @@ function computeComplexLayout(seqA, ptAOrig, seqB, ptBOrig, region, S, tailMode)
   for(let k=0;k<dupLen;k++){ xA[aStart+k]=k*S; yA[aStart+k]=0; }              // A: left -> right
   for(let m=0;m<dupLen;m++){ xB[bStart+m]=(dupLen-1-m)*S; yB[bStart+m]=rungY; } // B: right -> left (antiparallel)
 
-  function doFlank(lo,hi,pt,attachLocalIdx,dupEndX,dupEndY,angleDeg,into){    // hi exclusive
+  // Each flank continues straight out from its own end of the duplex, in the same
+  // direction that strand was already heading — not a fixed diagonal — connected by one
+  // normal bond. attachFlankContinuing only deviates from that if it would otherwise
+  // land on something already drawn. `occupied` starts as the duplex's own rungs so no
+  // flank gets placed on top of the ladder, and each flank is added to it before the
+  // next is placed, so later flanks also avoid earlier ones.
+  const occupied=[];
+  for(let k=0;k<dupLen;k++){
+    occupied.push({x:xA[aStart+k], y:yA[aStart+k]});
+    occupied.push({x:xB[bStart+k], y:yB[bStart+k]});
+  }
+  function place(lo,hi,pt,attachLocalIdx,dupEndX,dupEndY,continueDeg,into){    // hi exclusive
     if(hi<=lo) return;
     const local=sliceFlankPT(pt,lo,hi);
-    const lay=computeLayout(local.length, local, S, tailMode);
-    // stand-off distance adapts to how far this flank's own farthest point reaches from its attach
-    // base: rotating a rigid shape can't change that internal distance, only its heading, so a fixed
-    // 1-SPACING stand-off can let a far-reaching point (e.g. a straggling free tail) swing back near
-    // the duplex regardless of orientation. Standing off by (that reach + S) guarantees every flank
-    // point stays at least S from the duplex end, by the triangle inequality — provable, not hoped for.
-    let R=0; for(let i=0;i<local.length;i++) R=Math.max(R,Math.hypot(lay.x[i]-lay.x[attachLocalIdx],lay.y[i]-lay.y[attachLocalIdx]));
-    const standoff=R+S;
-    const rad=angleDeg*Math.PI/180;
-    const targetX=dupEndX+Math.cos(rad)*standoff, targetY=dupEndY+Math.sin(rad)*standoff;
-    const at=attachFlank(local.length, lay, attachLocalIdx, targetX, targetY, angleDeg);
+    const at=attachFlankContinuing(local, attachLocalIdx, S, tailMode, dupEndX, dupEndY, continueDeg, occupied);
     for(let i=0;i<local.length;i++){ into.x[lo+i]=at.x[i]; into.y[lo+i]=at.y[i]; }
   }
-  doFlank(0, aStart, ptA, aStart-1, 0, 0, 225, {x:xA,y:yA});                    // A 5' flank: up-left
-  doFlank(aEnd+1, nA, ptA, 0, (dupLen-1)*S, 0, -45, {x:xA,y:yA});               // A 3' flank: up-right
-  doFlank(0, bStart, ptB, bStart-1, (dupLen-1)*S, rungY, 45, {x:xB,y:yB});      // B 5' flank: down-right
-  doFlank(bEnd+1, nB, ptB, 0, 0, rungY, 135, {x:xB,y:yB});                      // B 3' flank: down-left
+  // A runs left->right through the duplex, B runs right->left (antiparallel): each flank
+  // continues past whichever end it's attached to, in the direction that strand was
+  // already moving.
+  place(0, aStart, ptA, aStart-1, 0, 0, 180, {x:xA,y:yA});                    // A 5' flank: continue left
+  place(aEnd+1, nA, ptA, 0, (dupLen-1)*S, 0, 0, {x:xA,y:yA});                 // A 3' flank: continue right
+  place(0, bStart, ptB, bStart-1, (dupLen-1)*S, rungY, 0, {x:xB,y:yB});       // B 5' flank: continue right
+  place(bEnd+1, nB, ptB, 0, 0, rungY, 180, {x:xB,y:yB});                     // B 3' flank: continue left
 
   return {xA,yA,xB,yB,ptA,ptB,dupLen,broken};
 }
@@ -734,20 +949,13 @@ function computeComplexLayout(seqA, ptAOrig, seqB, ptBOrig, region, S, tailMode)
 // straight). Anything B has beyond the hybridizing region (its own flanks/hairpins) is attached
 // with the same doFlank/attachFlank machinery computeComplexLayout uses, just anchored to B's
 // placed hybridizing segment instead of a fresh ladder.
-// Renders with the SAME renderComplex()/buildComplexExportSVG() as the ladder mode — the only
+// Renders through the SAME strands()/buildScene() path as the ladder mode — the only
 // difference is what feeds CM.xA/yA/xB/yB/ptA/ptB, so a base can end up with two drawn rungs (its
 // own intramolecular one, plus the new one to B) — not biophysically real, matches this app's
 // art-first premise.
 function computeSideHybridLayout(seqA, ptAOrig, seqB, ptBOrig, region, S, tailModeA, tailModeB){
   const {aStart,aEnd,bStart,bEnd}=region;
-  const nA=seqA.length, nB=seqB.length;
-  if(!(Number.isInteger(aStart)&&Number.isInteger(aEnd)&&aStart>=0&&aEnd<nA&&aStart<=aEnd))
-    throw `Invalid A range (sequence is ${nA} nt).`;
-  if(!(Number.isInteger(bStart)&&Number.isInteger(bEnd)&&bStart>=0&&bEnd<nB&&bStart<=bEnd))
-    throw `Invalid B range (sequence is ${nB} nt).`;
-  const dupLen=aEnd-aStart+1;
-  if(dupLen!==bEnd-bStart+1)
-    throw `Duplex region lengths differ: A range is ${dupLen} nt, B range is ${bEnd-bStart+1} nt.`;
+  const nA=seqA.length, nB=seqB.length, dupLen=validateRegion(region,nA,nB);
   if(dupLen<2) throw "The hybridizing region needs at least 2 nt, to get a direction to offset along from A's own arm.";
 
   const layA=computeLayout(nA, ptAOrig, S, tailModeA);     // A: completely normal, nothing broken
@@ -794,21 +1002,26 @@ function computeSideHybridLayout(seqA, ptAOrig, seqB, ptBOrig, region, S, tailMo
     const ai=aStart+k, bi=bEnd-k;                          // antiparallel correspondence
     xB[bi]=layA.x[ai]+perpSigned.x*rungY; yB[bi]=layA.y[ai]+perpSigned.y*rungY;
   }
-  function doFlank(lo,hi,pt,attachLocalIdx,targetX,targetY,angleDeg,into){    // hi exclusive
+  // Each of B's own flanks (beyond the hybridizing region) continues straight out from
+  // its end of the offset line, in the direction B was already heading — not a fixed
+  // diagonal — connected by one normal bond. `occupied` includes ALL of A's own points
+  // (A is untouched and could have structure anywhere) plus B's duplex-correspondence
+  // points, so a flank only deviates from that straight continuation if it would
+  // otherwise land on top of something actually there.
+  const occupied=[];
+  for(let i=0;i<nA;i++) occupied.push({x:layA.x[i], y:layA.y[i]});
+  for(let k=0;k<dupLen;k++) occupied.push({x:xB[bEnd-k], y:yB[bEnd-k]});
+  function place(lo,hi,pt,attachLocalIdx,dupEndX,dupEndY,continueDeg,into){    // hi exclusive
     if(hi<=lo) return;
     const local=sliceFlankPT(pt,lo,hi);
-    const lay=computeLayout(local.length, local, S, tailModeB);
-    let R=0; for(let i=0;i<local.length;i++) R=Math.max(R,Math.hypot(lay.x[i]-lay.x[attachLocalIdx],lay.y[i]-lay.y[attachLocalIdx]));
-    const standoff=R+S;
-    const rad=angleDeg*Math.PI/180;
-    const tX=targetX+Math.cos(rad)*standoff, tY=targetY+Math.sin(rad)*standoff;
-    const at=attachFlank(local.length, lay, attachLocalIdx, tX, tY, angleDeg);
+    const at=attachFlankContinuing(local, attachLocalIdx, S, tailModeB, dupEndX, dupEndY, continueDeg, occupied);
     for(let i=0;i<local.length;i++){ into.x[lo+i]=at.x[i]; into.y[lo+i]=at.y[i]; }
   }
-  const alongDeg=Math.atan2(dy,dx)*180/Math.PI;    // B's flank angles, expressed relative to A's arm direction
-  // fan the flanks out on the SAME side as the chosen offset, so they don't cross back over A
-  doFlank(0, bStart, ptBFixed, bStart-1, xB[bStart], yB[bStart], alongDeg+sign*45, {x:xB,y:yB});
-  doFlank(bEnd+1, nB, ptBFixed, 0, xB[bEnd], yB[bEnd], alongDeg+180-sign*45, {x:xB,y:yB});
+  const alongDeg=Math.atan2(dy,dx)*180/Math.PI;    // A's arm direction
+  // xB[bStart] corresponds to A's aEnd (the far end of the arm); xB[bEnd] corresponds to
+  // A's aStart (the near end) — B runs the opposite way along the offset line from A.
+  place(0, bStart, ptBFixed, bStart-1, xB[bStart], yB[bStart], alongDeg, {x:xB,y:yB});
+  place(bEnd+1, nB, ptBFixed, 0, xB[bEnd], yB[bEnd], alongDeg+180, {x:xB,y:yB});
 
   // sanity check for the most common misuse: Strand A is supposed to contribute the EXISTING stem
   // this attaches alongside. If none of A's chosen range is actually paired in A's own structure,
@@ -824,17 +1037,64 @@ function computeSideHybridLayout(seqA, ptAOrig, seqB, ptBOrig, region, S, tailMo
   return {xA:layA.x, yA:layA.y, xB, yB, ptA:ptAOrig, ptB:ptBFixed, dupLen, broken, warning};
 }
 
-/* ---------- geometry helpers ---------- */
-function ex(i){ return M.x[i]+(M.offX[i]||0); }   // effective coord = auto layout + manual drag offset
-function ey(i){ return M.y[i]+(M.offY[i]||0); }
-function centroid(){
-  let sx=0,sy=0; for(let i=0;i<M.n;i++){sx+=ex(i);sy+=ey(i);}
-  return {cx:sx/M.n, cy:sy/M.n};
+/* ---------- strands: the one abstraction every draw / fit / export / edit path goes through ----------
+   Single-sequence mode is ONE strand (backed by M); complex mode is TWO (backed by CM + the two
+   source docs). render(), fit(), export, drag, selection, marquee, part-select, rotate-selection
+   and zoom-to-selection all iterate strands() instead of keeping a hand-copied "complex" twin of
+   each function — that duplication is what let complex mode silently miss features (numbering,
+   dashed non-WC rungs) that single mode had. Each descriptor holds REFERENCES to the live arrays,
+   so writes through it (st.offX[i]+=…, st.color[i]=…) land in M / CM / docs directly. Call
+   strands() fresh each time rather than caching it: build()/resetCircle etc. reassign M's arrays. */
+const FALLBACK_COLOR="#c8cdd6";   // letter / identity color for any base without a palette entry
+const SEL_RING="#ff8c1a", BOND_HI="#ffd166", NUM_COLOR="#8a93a3";
+function strands(){
+  if(CM.active){
+    const cx=complexes[CM.idx]; if(!cx) return [];
+    const dA=docs[cx.docA]||newDoc(), dB=docs[cx.docB]||newDoc();
+    return [
+      {tag:'A', seq:CM.seqA, n:CM.nA, pt:CM.ptA, nonWC:CM.nonWCA, x:CM.xA, y:CM.yA, offX:CM.offXA, offY:CM.offYA,
+       sel:CM.selA, color:dA.color, circleColor:dA.circleColor, bondColor:dA.bondColor, selBond:null},
+      {tag:'B', seq:CM.seqB, n:CM.nB, pt:CM.ptB, nonWC:CM.nonWCB, x:CM.xB, y:CM.yB, offX:CM.offXB, offY:CM.offYB,
+       sel:CM.selB, color:dB.color, circleColor:dB.circleColor, bondColor:dB.bondColor, selBond:null},
+    ];
+  }
+  if(M.n===0) return [];
+  return [{tag:'S', seq:M.seq, n:M.n, pt:M.pt, nonWC:M.nonWC, x:M.x, y:M.y, offX:M.offX, offY:M.offY,
+    sel:M.selected, color:M.color, circleColor:M.circleColor, bondColor:M.bondColor, selBond:M.selBond}];
 }
-function rotated(i,c,cosA,sinA){
-  const dx=ex(i)-c.cx, dy=ey(i)-c.cy;
-  return {x:c.cx+dx*cosA-dy*sinA, y:c.cy+dx*sinA+dy*cosA};
+// inter-strand (hetero-duplex) rungs as [[strandIdx,i],[strandIdx,j]] — empty outside complex mode
+function heteroPairs(){
+  if(!CM.active || !complexes[CM.idx]) return [];
+  const r=complexes[CM.idx].region, out=[];
+  for(let k=0;k<CM.dupLen;k++) out.push([[0,r.aStart+k],[1,r.bEnd-k]]);
+  return out;
 }
+function hasContent(){ return strands().some(st=>st.n>0); }
+const effX=(st,i)=>st.x[i]+(st.offX[i]||0);    // effective model coord = auto layout + manual offset
+const effY=(st,i)=>st.y[i]+(st.offY[i]||0);
+// display coords: every strand rotated by M.rot about the COMBINED centroid (text stays upright —
+// glyphs are drawn at the rotated point, never rotated themselves). Returns one array per strand.
+function displayPoints(sts){
+  sts=sts||strands();
+  let sx=0,sy=0,c=0;
+  for(const st of sts) for(let i=0;i<st.n;i++){ sx+=effX(st,i); sy+=effY(st,i); c++; }
+  const cx=c?sx/c:0, cy=c?sy/c:0;
+  const a=M.rot*Math.PI/180, cosA=Math.cos(a), sinA=Math.sin(a);
+  return sts.map(st=>{
+    const out=new Array(st.n);
+    for(let i=0;i<st.n;i++){ const dx=effX(st,i)-cx, dy=effY(st,i)-cy;
+      out[i]={x:cx+dx*cosA-dy*sinA, y:cy+dx*sinA+dy*cosA}; }
+    return out;
+  });
+}
+function bbox(points, pad){
+  let minx=Infinity,miny=Infinity,maxx=-Infinity,maxy=-Infinity;
+  for(const p of points){ minx=Math.min(minx,p.x); miny=Math.min(miny,p.y); maxx=Math.max(maxx,p.x); maxy=Math.max(maxy,p.y); }
+  minx-=pad; miny-=pad; maxx+=pad; maxy+=pad;
+  return {minx,miny,maxx,maxy,W:maxx-minx,H:maxy-miny};
+}
+function contentBox(){ return bbox(displayPoints().flat(), M.font*2.2); }
+
 // the closed sub-structure "branch" rooted at base i, for drag-to-reposition.
 // Nested dot-bracket guarantees a paired base's whole subtree is the contiguous range [a,b].
 function branchIndicesIn(pt, i, wholeBranch){
@@ -845,201 +1105,49 @@ function branchIndicesIn(pt, i, wholeBranch){
   }
   return [i];   // unpaired base, or Alt-drag forcing single-base mode
 }
-function branchIndices(i, wholeBranch){ return branchIndicesIn(M.pt, i, wholeBranch); }
-
-/* ---------- complex geometry (shares M.rot/zoom/panX/panY/font as the view state) ---------- */
-function cex(i){ return CM.xA[i]+(CM.offXA[i]||0); }
-function cey(i){ return CM.yA[i]+(CM.offYA[i]||0); }
-function cbx(i){ return CM.xB[i]+(CM.offXB[i]||0); }
-function cby(i){ return CM.yB[i]+(CM.offYB[i]||0); }
-function complexCentroid(){
-  let sx=0,sy=0,n=0;
-  for(let i=0;i<CM.nA;i++){sx+=cex(i);sy+=cey(i);n++;}
-  for(let i=0;i<CM.nB;i++){sx+=cbx(i);sy+=cby(i);n++;}
-  return n? {cx:sx/n,cy:sy/n} : {cx:0,cy:0};
-}
-function complexDisplayCoords(){
-  const c=complexCentroid();
-  const a=M.rot*Math.PI/180, cosA=Math.cos(a), sinA=Math.sin(a);
-  const rot=(x,y)=>{ const dx=x-c.cx, dy=y-c.cy; return {x:c.cx+dx*cosA-dy*sinA, y:c.cy+dx*sinA+dy*cosA}; };
-  const ptsA=new Array(CM.nA), ptsB=new Array(CM.nB);
-  for(let i=0;i<CM.nA;i++) ptsA[i]=rot(cex(i),cey(i));
-  for(let i=0;i<CM.nB;i++) ptsB[i]=rot(cbx(i),cby(i));
-  return {ptsA,ptsB};
-}
-function hasContent(){ return CM.active ? (CM.nA>0||CM.nB>0) : M.n>0; }
-function displayCoords(){
-  const c=centroid();
-  const a=M.rot*Math.PI/180, cosA=Math.cos(a), sinA=Math.sin(a);
-  const pts=new Array(M.n);
-  for(let i=0;i<M.n;i++) pts[i]=rotated(i,c,cosA,sinA);
-  return pts;
-}
-function lum(hex){
-  const n=parseInt(hex.slice(1),16);
-  const r=(n>>16)&255,g=(n>>8)&255,b=n&255;
-  return (0.299*r+0.587*g+0.114*b)/255;
-}
-
-/* ---------- render ---------- */
-const svg=$("canvas");
-function render(){
-  if(CM.active) return renderComplex();
-  while(svg.firstChild) svg.removeChild(svg.firstChild);
-  // real background rect = WYSIWYG with export, and immune to browser auto-dark-mode
-  const bg=document.createElementNS(SVGNS,"rect");
-  bg.setAttribute("x",0);bg.setAttribute("y",0);
-  bg.setAttribute("width","100%");bg.setAttribute("height","100%");
-  bg.setAttribute("fill",$("bgColor").value);
-  svg.appendChild(bg);
-  if(M.n===0) return;
-  const pts=displayCoords();
-  const g=document.createElementNS(SVGNS,"g");
-  g.setAttribute("transform",`translate(${M.panX},${M.panY}) scale(${M.zoom})`);
-  svg.appendChild(g);
-
-  const font=M.font;
-  const backColor=$("backColor").value, pairColor=$("pairColor").value;
-  const showBack=$("cBack").checked, showPair=$("cPair").checked,
-        showCircle=$("cCircle").checked, showLetter=$("cLetter").checked,
-        bold=$("cBold").checked;
-  const frameMode=$("frameMode").value, fillMode=$("fillMode").value,
-        frameColor=$("frameColor").value, fillColor=$("fillColor").value;
-  const gap=font*0.62;   // shrink pair/backbone lines so they don't touch glyphs
-  const circR=font*0.72, circW=+$("frameW").value;
-
-  function shorten(p,q,pad){
-    const dx=q.x-p.x, dy=q.y-p.y, L=Math.hypot(dx,dy)||1;
-    const ux=dx/L, uy=dy/L;
-    return [{x:p.x+ux*pad,y:p.y+uy*pad},{x:q.x-ux*pad,y:q.y-uy*pad}];
+// The "part" containing base i — derived from pt[] on demand, never stored (so it can't go out of
+// sync with the structure). Three kinds:
+//   stem  — i is paired: the maximal run of stacked pairs (the helix) i belongs to, both rails.
+//           Just the helix, NOT what it encloses (plain drag already moves the whole subtree).
+//   ring  — i is unpaired inside a closing pair: every unpaired base directly in that same loop.
+//   free  — i is unpaired with no enclosing pair: the contiguous unpaired run (5'/3' tail, linker).
+function partIndicesIn(pt, i){
+  const n=pt.length, out=[];
+  if(pt[i]!==-1){
+    let a=Math.min(i,pt[i]), b=Math.max(i,pt[i]);
+    while(a>0 && b<n-1 && pt[a-1]===b+1) { a--; b++; }        // grow outward
+    let a2=a, b2=b;
+    while(a2+1<b2-1 && pt[a2+1]===b2-1) { a2++; b2--; }       // grow inward
+    for(let k=a;k<=a2;k++) out.push(k);
+    for(let k=b2;k<=b;k++) out.push(k);
+    return out;
   }
-  function line(p,q,color,w,dash){
-    const l=document.createElementNS(SVGNS,"line");
-    l.setAttribute("x1",p.x);l.setAttribute("y1",p.y);
-    l.setAttribute("x2",q.x);l.setAttribute("y2",q.y);
-    l.setAttribute("stroke",color);l.setAttribute("stroke-width",w);
-    l.setAttribute("stroke-linecap","round");
-    if(dash)l.setAttribute("stroke-dasharray",dash);
-    g.appendChild(l);
+  // find the enclosing opener: walk left, hopping over complete sub-structures
+  let k=i-1, enc=-1;
+  while(k>=0){
+    if(pt[k]===-1){ k--; continue; }
+    if(pt[k]>i){ enc=k; break; }       // opener whose partner is past i — encloses i
+    k=Math.min(k,pt[k])-1;              // a closed sub-structure entirely left of i — skip it
   }
-
-  // base-pair rungs (H-bonds) — individually colorable & selectable
-  if(showPair){
-    const w=Math.max(1.4,font*0.11);
-    for(let i=0;i<M.n;i++){
-      const j=M.pt[i];
-      if(j<=i) continue;
-      const [a,b]=shorten(pts[i],pts[j],gap);
-      if(M.selBond.has(i)){                       // highlight underlay
-        const hi=document.createElementNS(SVGNS,"line");
-        hi.setAttribute("x1",a.x);hi.setAttribute("y1",a.y);
-        hi.setAttribute("x2",b.x);hi.setAttribute("y2",b.y);
-        hi.setAttribute("stroke","#ffd166");hi.setAttribute("stroke-width",w+6/M.zoom+2);
-        hi.setAttribute("stroke-linecap","round");hi.setAttribute("opacity","0.9");
-        g.appendChild(hi);
-      }
-      line(a,b,M.bondColor[i]||pairColor,w);       // visible rung
-      const hit=document.createElementNS(SVGNS,"line");   // fat invisible click target
-      hit.setAttribute("x1",a.x);hit.setAttribute("y1",a.y);
-      hit.setAttribute("x2",b.x);hit.setAttribute("y2",b.y);
-      hit.setAttribute("stroke","transparent");
-      hit.setAttribute("stroke-width",Math.max(w,font*0.5));
-      hit.setAttribute("stroke-linecap","round");
-      hit.setAttribute("class","bond-hit");hit.dataset.i=i;
-      g.appendChild(hit);
-    }
+  if(enc===-1){                          // exterior: contiguous unpaired run
+    let a=i, b=i; while(a>0 && pt[a-1]===-1) a--; while(b<n-1 && pt[b+1]===-1) b++;
+    for(let t=a;t<=b;t++) out.push(t);
+    return out;
   }
-  // backbone
-  if(showBack){
-    for(let i=0;i<M.n-1;i++){
-      const[a,b]=shorten(pts[i],pts[i+1],gap*0.92);
-      line(a,b,backColor,Math.max(1,font*0.08));
-    }
+  for(let t=enc+1;t<pt[enc];){           // unpaired bases directly in the enclosing loop
+    if(pt[t]===-1){ out.push(t); t++; } else t=pt[t]+1;
   }
-  // bases — drawn in two layers so letters always sit ON TOP of every circle,
-  // even where neighbouring filled circles overlap.
-  const numEvery=parseInt($("numEvery").value)||0;
-  const gBack=document.createElementNS(SVGNS,"g");   // circles + click targets
-  const gFront=document.createElementNS(SVGNS,"g");  // letters, rings, numbers
-  g.appendChild(gBack); g.appendChild(gFront);
-  // layer 1: circles + invisible hit targets
-  for(let i=0;i<M.n;i++){
-    const p=pts[i], col=M.color[i];
-    if(showCircle){
-      const cEl=document.createElementNS(SVGNS,"circle");
-      cEl.setAttribute("cx",p.x);cEl.setAttribute("cy",p.y);
-      cEl.setAttribute("r",circR);
-      const bc=baseColor(M.seq[i]);
-      const fillC = M.circleColor[i] || (fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
-      cEl.setAttribute("fill", fillC);
-      const stroke = frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
-      cEl.setAttribute("stroke",stroke);
-      if(stroke!=="none") cEl.setAttribute("stroke-width",circW);
-      gBack.appendChild(cEl);
-    }
-    const hit=document.createElementNS(SVGNS,"circle");   // transparent, keeps base clickable
-    hit.setAttribute("cx",p.x);hit.setAttribute("cy",p.y);
-    hit.setAttribute("r",Math.max(circR,font*0.6));hit.setAttribute("fill","transparent");
-    hit.setAttribute("class","base-hit"); hit.dataset.i=i;
-    gBack.appendChild(hit);
-  }
-  // layer 2: selection rings, letters, numbers (always above circles)
-  for(let i=0;i<M.n;i++){
-    const p=pts[i], col=M.color[i];
-    if(M.selected.has(i)){
-      const ring=document.createElementNS(SVGNS,"circle");
-      ring.setAttribute("cx",p.x);ring.setAttribute("cy",p.y);
-      ring.setAttribute("r",font*0.82);
-      ring.setAttribute("fill","none");
-      ring.setAttribute("stroke","#ff8c1a");ring.setAttribute("stroke-width",2/M.zoom+0.8);
-      gFront.appendChild(ring);
-    }
-    if(showLetter){
-      const t=document.createElementNS(SVGNS,"text");
-      t.setAttribute("x",p.x);t.setAttribute("y",p.y);
-      t.setAttribute("text-anchor","middle");
-      t.setAttribute("dominant-baseline","central");
-      t.setAttribute("font-family","ui-monospace,Menlo,monospace");
-      t.setAttribute("font-size",font);
-      t.setAttribute("font-weight",bold?"700":"400");
-      t.setAttribute("fill", col);
-      t.setAttribute("class","base-hit"); t.dataset.i=i;
-      t.textContent=M.seq[i];
-      gFront.appendChild(t);
-    }
-    if(numEvery>0 && ((i+1)%numEvery===0 || i===0)){
-      const nlab=document.createElementNS(SVGNS,"text");
-      nlab.setAttribute("x",p.x);nlab.setAttribute("y",p.y-font*0.95);
-      nlab.setAttribute("text-anchor","middle");
-      nlab.setAttribute("font-size",font*0.5);
-      nlab.setAttribute("fill","#8a93a3");
-      nlab.setAttribute("font-family","ui-monospace,monospace");
-      nlab.textContent=(i+1);
-      gFront.appendChild(nlab);
-    }
-  }
-  $("badge").textContent=`${M.n} nt · ${Math.round(M.zoom*100)}%`;
-  updateExportInfo();
+  return out;
 }
 
-/* ---------- render a complex (Feature #4) ----------
-   Mirrors render() structurally (background -> hetero rungs -> intramolecular rungs ->
-   backbones -> circles layer -> letters layer) but for two coordinate arrays instead of one.
-   Numbering (numEvery) and per-bond click-to-recolor are NOT implemented for complexes in this
-   version — a deliberate scope cut, noted in the Complex tab's hint text. */
-function renderComplex(){
-  while(svg.firstChild) svg.removeChild(svg.firstChild);
-  const bg=document.createElementNS(SVGNS,"rect");
-  bg.setAttribute("x",0);bg.setAttribute("y",0);bg.setAttribute("width","100%");bg.setAttribute("height","100%");
-  bg.setAttribute("fill",$("bgColor").value);
-  svg.appendChild(bg);
-  if(!complexes[CM.idx]) return;
-  if(CM.nA===0 && CM.nB===0) return;
-  const {ptsA,ptsB}=complexDisplayCoords();
-  const g=document.createElementNS(SVGNS,"g");
-  g.setAttribute("transform",`translate(${M.panX},${M.panY}) scale(${M.zoom})`);
-  svg.appendChild(g);
-
+/* ---------- scene: ONE description of the drawing, consumed by both render() and export ----------
+   Returns a flat list of {t, a, text?} element specs in paint order: hetero rungs -> per-strand
+   rungs -> backbones -> circles -> (selection rings) -> numbers -> letters. interactive=true adds
+   the on-canvas-only extras (invisible hit targets, selection rings, bond highlight underlays);
+   export uses interactive=false, so what you export is exactly what you see minus the UI chrome. */
+function baseColor(ch){ return M.palette[ch] || FALLBACK_COLOR; }   // identity palette (independent of letter color)
+function buildScene(interactive){
+  const sts=strands(), P=displayPoints(sts), els=[];
   const font=M.font;
   const backColor=$("backColor").value, pairColor=$("pairColor").value, dupColor=$("dupColor").value;
   const showBack=$("cBack").checked, showPair=$("cPair").checked,
@@ -1047,141 +1155,120 @@ function renderComplex(){
   const frameMode=$("frameMode").value, fillMode=$("fillMode").value,
         frameColor=$("frameColor").value, fillColor=$("fillColor").value;
   const gap=font*0.62, circR=font*0.72, circW=+$("frameW").value;
-  const region=complexes[CM.idx].region;
-  const docA=docs[complexes[CM.idx].docA], docB=docs[complexes[CM.idx].docB];
+  const numEvery=parseInt($("numEvery").value)||0;
+  const numStart=parseInt($("numOffset").value), numOff=(Number.isFinite(numStart)?numStart:1)-1;
+  const rungW=Math.max(1.4,font*0.11);
+  const E=(t,a,text)=>{ els.push({t,a,text}); };
+  const seg=(p,q,pad)=>{ const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
+    return {x1:p.x+ux*pad,y1:p.y+uy*pad,x2:q.x-ux*pad,y2:q.y-uy*pad}; };
+  const line=(s,stroke,w,extra)=>E('line',Object.assign({...s,stroke,'stroke-width':w,'stroke-linecap':'round'},extra||{}));
 
-  function shorten(p,q,pad){ const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
-    return [{x:p.x+ux*pad,y:p.y+uy*pad},{x:q.x-ux*pad,y:q.y-uy*pad}]; }
-  function line(p,q,color,w){ const l=document.createElementNS(SVGNS,"line");
-    l.setAttribute("x1",p.x);l.setAttribute("y1",p.y);l.setAttribute("x2",q.x);l.setAttribute("y2",q.y);
-    l.setAttribute("stroke",color);l.setAttribute("stroke-width",w);l.setAttribute("stroke-linecap","round");
-    g.appendChild(l); }
-
-  // duplex (hetero) rungs — drawn first, distinct color, not individually selectable in v1
-  if(showPair) for(let k=0;k<CM.dupLen;k++){
-    const ai=region.aStart+k, bi=region.bEnd-k;
-    const [a,b]=shorten(ptsA[ai],ptsB[bi],gap);
-    line(a,b,dupColor,Math.max(1.6,font*0.13));
+  if(showPair){
+    for(const [[sa,ia],[sb,ib]] of heteroPairs())
+      line(seg(P[sa][ia],P[sb][ib],gap), dupColor, Math.max(1.6,font*0.13));
+    sts.forEach((st,s)=>{
+      for(let i=0;i<st.n;i++){
+        const j=st.pt[i]; if(j<=i) continue;
+        const sg=seg(P[s][i],P[s][j],gap);
+        if(interactive && st.selBond && st.selBond.has(i))
+          line(sg, BOND_HI, rungW+6/M.zoom+2, {opacity:0.9});
+        // non-WC pairs ([ ] / { } / < > in the input) are dashed so they read as different from a
+        // Watson-Crick rung at a glance. Works in complex mode too: breakForDuplex only ever clears
+        // pt[], it never renumbers, so the strand's original nonWC[] still lines up index-for-index.
+        const dash=(st.nonWC&&st.nonWC[i]) ? {'stroke-dasharray':`${rungW*1.6},${rungW*1.4}`} : null;
+        line(sg, (st.bondColor&&st.bondColor[i])||pairColor, rungW, dash);
+        if(interactive && st.selBond)   // fat invisible click target (single-sequence mode only)
+          line(sg,'transparent',Math.max(rungW,font*0.5),{class:'bond-hit','data-s':s,'data-i':i});
+      }
+    });
   }
-  // per-strand intramolecular rungs (reuse each doc's own bondColor map — carries over from
-  // single-sequence-mode recoloring, but isn't individually clickable while viewing a complex)
-  function drawStrandBonds(pts,pt,n,bondColorMap){
-    if(!showPair) return;
-    const w=Math.max(1.4,font*0.11);
-    for(let i=0;i<n;i++){ const j=pt[i]; if(j<=i) continue;
-      const [a,b]=shorten(pts[i],pts[j],gap);
-      line(a,b,(bondColorMap&&bondColorMap[i])||pairColor,w); }
-  }
-  drawStrandBonds(ptsA,CM.ptA,CM.nA,docA.bondColor);
-  drawStrandBonds(ptsB,CM.ptB,CM.nB,docB.bondColor);
-  // backbones
-  function drawBackbone(pts,n){ if(!showBack) return;
-    for(let i=0;i<n-1;i++){ const [a,b]=shorten(pts[i],pts[i+1],gap*0.92); line(a,b,backColor,Math.max(1,font*0.08)); } }
-  drawBackbone(ptsA,CM.nA); drawBackbone(ptsB,CM.nB);
-
-  // bases: two-pass circles-then-letters, per strand, same ordering rule as single-sequence mode
-  const gBack=document.createElementNS(SVGNS,"g"), gFront=document.createElementNS(SVGNS,"g");
-  g.appendChild(gBack); g.appendChild(gFront);
-  function drawStrandBases(strandTag,pts,seq,n,colorArr,circleColorMap,selectedSet){
-    for(let i=0;i<n;i++){
-      const p=pts[i];
+  if(showBack) sts.forEach((st,s)=>{
+    for(let i=0;i<st.n-1;i++) line(seg(P[s][i],P[s][i+1],gap*0.92), backColor, Math.max(1,font*0.08));
+  });
+  // bases in two passes so letters always sit ON TOP of every circle, even where filled circles overlap
+  sts.forEach((st,s)=>{
+    for(let i=0;i<st.n;i++){
+      const p=P[s][i];
       if(showCircle){
-        const cEl=document.createElementNS(SVGNS,"circle");
-        cEl.setAttribute("cx",p.x);cEl.setAttribute("cy",p.y);cEl.setAttribute("r",circR);
-        const bc=baseColor(seq[i]);
-        const fillC=(circleColorMap&&circleColorMap[i])||(fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
-        cEl.setAttribute("fill",fillC);
-        const stroke=frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
-        cEl.setAttribute("stroke",stroke); if(stroke!=="none") cEl.setAttribute("stroke-width",circW);
-        gBack.appendChild(cEl);
+        const bc=baseColor(st.seq[i]);
+        const fill=(st.circleColor&&st.circleColor[i]) || (fillMode==='none'?'none':(fillMode==='base'?bc:fillColor));
+        const stroke=frameMode==='none'?'none':(frameMode==='base'?bc:frameColor);
+        const a={cx:p.x,cy:p.y,r:circR,fill,stroke}; if(stroke!=='none') a['stroke-width']=circW;
+        E('circle',a);
       }
-      const hit=document.createElementNS(SVGNS,"circle");
-      hit.setAttribute("cx",p.x);hit.setAttribute("cy",p.y);hit.setAttribute("r",Math.max(circR,font*0.6));
-      hit.setAttribute("fill","transparent"); hit.setAttribute("class","base-hit");
-      hit.dataset.strand=strandTag; hit.dataset.i=i;
-      gBack.appendChild(hit);
+      if(interactive) E('circle',{cx:p.x,cy:p.y,r:Math.max(circR,font*0.6),fill:'transparent',class:'base-hit','data-s':s,'data-i':i});
     }
-    for(let i=0;i<n;i++){
-      const p=pts[i];
-      if(selectedSet.has(i)){
-        const ring=document.createElementNS(SVGNS,"circle");
-        ring.setAttribute("cx",p.x);ring.setAttribute("cy",p.y);ring.setAttribute("r",font*0.82);
-        ring.setAttribute("fill","none");ring.setAttribute("stroke","#ff8c1a");
-        ring.setAttribute("stroke-width",2/M.zoom+0.8); gFront.appendChild(ring);
-      }
+  });
+  sts.forEach((st,s)=>{
+    for(let i=0;i<st.n;i++){
+      const p=P[s][i];
+      if(interactive && st.sel.has(i))
+        E('circle',{cx:p.x,cy:p.y,r:font*0.82,fill:'none',stroke:SEL_RING,'stroke-width':2/M.zoom+0.8});
+      if(numEvery>0 && ((i+1)%numEvery===0 || i===0))
+        E('text',{x:p.x,y:p.y-font*0.95,'text-anchor':'middle','font-size':font*0.5,fill:NUM_COLOR,
+          'font-family':'ui-monospace,monospace'}, String(i+1+numOff));
       if(showLetter){
-        const t=document.createElementNS(SVGNS,"text");
-        t.setAttribute("x",p.x);t.setAttribute("y",p.y);t.setAttribute("text-anchor","middle");
-        t.setAttribute("dominant-baseline","central");
-        t.setAttribute("font-family","ui-monospace,Menlo,monospace"); t.setAttribute("font-size",font);
-        t.setAttribute("font-weight",bold?"700":"400"); t.setAttribute("fill",(colorArr&&colorArr[i])||"#c8cdd6");
-        t.setAttribute("class","base-hit"); t.dataset.strand=strandTag; t.dataset.i=i;
-        t.textContent=seq[i]; gFront.appendChild(t);
+        const a={x:p.x,y:p.y,'text-anchor':'middle','dominant-baseline':'central',
+          'font-family':'ui-monospace,Menlo,monospace','font-size':font,'font-weight':bold?700:400,
+          fill:(st.color&&st.color[i])||FALLBACK_COLOR};
+        if(interactive){ a.class='base-hit'; a['data-s']=s; a['data-i']=i; }
+        E('text',a,st.seq[i]);
       }
     }
-  }
-  drawStrandBases('A',ptsA,CM.seqA,CM.nA,docA.color,docA.circleColor,CM.selA);
-  drawStrandBases('B',ptsB,CM.seqB,CM.nB,docB.color,docB.circleColor,CM.selB);
+  });
+  return els;
+}
 
-  $("badge").textContent=`${CM.nA}+${CM.nB} nt (complex) · ${Math.round(M.zoom*100)}%`;
+/* ---------- render ---------- */
+const svg=$("canvas");
+function render(){
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+  // real background rect = WYSIWYG with export, and immune to browser auto-dark-mode
+  const bg=document.createElementNS(SVGNS,"rect");
+  bg.setAttribute("x",0);bg.setAttribute("y",0);
+  bg.setAttribute("width","100%");bg.setAttribute("height","100%");
+  bg.setAttribute("fill",$("bgColor").value);
+  svg.appendChild(bg);
+  if(!hasContent()){ $("badge").textContent="—"; updateExportInfo(); return; }
+  const g=document.createElementNS(SVGNS,"g");
+  g.setAttribute("transform",`translate(${M.panX},${M.panY}) scale(${M.zoom})`);
+  for(const el of buildScene(true)){
+    const node=document.createElementNS(SVGNS,el.t);
+    for(const k in el.a) node.setAttribute(k,el.a[k]);
+    if(el.text!==undefined) node.textContent=el.text;
+    g.appendChild(node);
+  }
+  svg.appendChild(g);
+  if(marquee) drawMarquee();
+  const nt = CM.active ? `${CM.nA}+${CM.nB} nt (complex)` : `${M.n} nt`;
+  $("badge").textContent=`${nt} · ${Math.round(M.zoom*100)}%`;
   updateExportInfo();
 }
 
-/* ---------- fit ---------- */
+/* ---------- view fitting ---------- */
+function viewToBox(b, maxZoom){
+  const w=svg.clientWidth, h=svg.clientHeight;
+  M.zoom=Math.max(0.05,Math.min(maxZoom||1e9, w/b.W, h/b.H));
+  M.panX=(w-b.W*M.zoom)/2 - b.minx*M.zoom;
+  M.panY=(h-b.H*M.zoom)/2 - b.miny*M.zoom;
+}
 function fit(){
-  if(CM.active) return fitComplex();
-  if(M.n===0) return;
-  const w=svg.clientWidth, h=svg.clientHeight;
-  if(w<2||h<2){ requestAnimationFrame(fit); return; }   // canvas not sized yet
-  const pts=displayCoords();
-  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
-  for(const p of pts){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
-    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
-  const pad=M.font*2.2;
-  minx-=pad;miny-=pad;maxx+=pad;maxy+=pad;
-  const zx=w/(maxx-minx), zy=h/(maxy-miny);
-  M.zoom=Math.max(0.05,Math.min(zx,zy));
-  M.panX=(w-(maxx-minx)*M.zoom)/2 - minx*M.zoom;
-  M.panY=(h-(maxy-miny)*M.zoom)/2 - miny*M.zoom;
+  if(!hasContent()) return;
+  if(svg.clientWidth<2||svg.clientHeight<2){ requestAnimationFrame(fit); return; }   // canvas not sized yet
+  viewToBox(contentBox());
   render();
 }
-function fitComplex(){
-  if(CM.nA===0 && CM.nB===0) return;
-  const w=svg.clientWidth, h=svg.clientHeight;
-  if(w<2||h<2){ requestAnimationFrame(fitComplex); return; }
-  const {ptsA,ptsB}=complexDisplayCoords();
-  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
-  for(const p of ptsA.concat(ptsB)){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
-    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
-  const pad=M.font*2.2; minx-=pad;miny-=pad;maxx+=pad;maxy+=pad;
-  const zx=w/(maxx-minx), zy=h/(maxy-miny);
-  M.zoom=Math.max(0.05,Math.min(zx,zy));
-  M.panX=(w-(maxx-minx)*M.zoom)/2 - minx*M.zoom;
-  M.panY=(h-(maxy-miny)*M.zoom)/2 - miny*M.zoom;
+// User request #6: center + zoom the canvas on the current selection (falls back to Fit when empty).
+function zoomToSelection(){
+  const sts=strands(), P=displayPoints(sts), pts=[];
+  sts.forEach((st,s)=>st.sel.forEach(i=>pts.push(P[s][i])));
+  if(!pts.length) return fit();
+  viewToBox(bbox(pts, M.font*3), 30);    // same 30x ceiling as wheel zoom, so one base doesn't fill the screen
   render();
-}
-
-/* export pixel dimensions at current PNG scale */
-function contentSize(){
-  if(CM.active) return complexContentSize();
-  const pts=displayCoords();
-  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
-  for(const p of pts){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
-    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
-  const pad=M.font*2.2;
-  return {W:(maxx-minx)+2*pad, H:(maxy-miny)+2*pad};
-}
-function complexContentSize(){
-  const {ptsA,ptsB}=complexDisplayCoords();
-  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
-  for(const p of ptsA.concat(ptsB)){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
-    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
-  const pad=M.font*2.2;
-  return {W:(maxx-minx)+2*pad, H:(maxy-miny)+2*pad};
 }
 function updateExportInfo(){
   if(!hasContent()){ $("pngDims").textContent="—"; return; }
-  const {W,H}=contentSize(); const s=+$("pngScale").value||1;
+  const {W,H}=contentBox(); const s=+$("pngScale").value||1;
   $("pngDims").textContent=`×${s} · ${Math.round(W*s)}×${Math.round(H*s)} px`;
 }
 
@@ -1196,7 +1283,7 @@ function build(){
   let parsed;
   try{ parsed=parseStructure($("seq").value,$("dot").value); }
   catch(e){ $("err").textContent="⚠ "+e; return; }
-  M.seq=parsed.seq; M.n=parsed.n; M.pt=parsed.pt; M.pkPairs=parsed.pk;
+  M.seq=parsed.seq; M.n=parsed.n; M.pt=parsed.pt; M.nonWC=parsed.nonWC;
   const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
   M.x=lay.x; M.y=lay.y;
   M.offX=new Array(M.n).fill(0); M.offY=new Array(M.n).fill(0);
@@ -1207,67 +1294,117 @@ function build(){
   fit();
 }
 
-/* relayout keeping colors/selection (flatten toggle) */
+/* relayout keeping colors/selection (tail-mode change). KNOWN LIMITATION, both modes: the baseline
+   is recomputed but manual offsets aren't, so a hand-placed branch can look off afterward. */
 function relayout(){
-  if(CM.active) return relayoutComplex();
+  if(CM.active){
+    const r=layoutComplex(complexes[CM.idx]); if(r.error) return;
+    CM.ptA=r.lay.ptA; CM.xA=r.lay.xA; CM.yA=r.lay.yA;
+    CM.ptB=r.lay.ptB; CM.xB=r.lay.xB; CM.yB=r.lay.yB;
+    return render();
+  }
   if(M.n===0) return;
   const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
   M.x=lay.x; M.y=lay.y;
   render();
 }
-function relayoutComplex(){                // same known limitation as single-mode relayout: this
-  const cx=complexes[CM.idx]; if(!cx) return;   // recomputes the baseline, so existing manual
-  const docA=docs[cx.docA], docB=docs[cx.docB]; // offsets may look off relative to the new layout
-  let pA,pB;
-  try{ pA=parseStructure(docA.seq,docA.dot); pB=parseStructure(docB.seq,docB.dot); } catch(e){ return; }
-  let lay;
-  try{
-    lay = cx.mode==='side'
-      ? computeSideHybridLayout(pA.seq,pA.pt,pB.seq,pB.pt,cx.region,SPACING,$("tailMode").value,$("tailMode").value)
-      : computeComplexLayout(pA.seq,pA.pt,pB.seq,pB.pt,cx.region,SPACING,$("tailMode").value);
-  } catch(e){ return; }
-  CM.ptA=lay.ptA; CM.xA=lay.xA; CM.yA=lay.yA;
-  CM.ptB=lay.ptB; CM.xB=lay.xB; CM.yB=lay.yB;
-  render();
-}
 
 /* ---------- coloring ---------- */
-function applyPalette(){
-  for(const id of ['A','U','T','G','C']) M.palette[id]=document.querySelector(`input[data-id=${id}]`).value;
-  for(let i=0;i<M.n;i++){
-    const b=M.seq[i];
-    M.color[i]=M.palette[b] || "#c8cdd6";
-  }
+function readPalette(){ for(const id of ['A','U','T','G','C']) M.palette[id]=document.querySelector(`input[data-id=${id}]`).value; }
+function applyPalette(){                   // reset every strand's letter colors to the identity palette
+  readPalette();
+  for(const st of strands()) for(let i=0;i<st.n;i++) st.color[i]=M.palette[st.seq[i]]||FALLBACK_COLOR;
   render();
 }
-function monochrome(){ const c=$("monoColor").value; for(let i=0;i<M.n;i++) M.color[i]=c; render(); }
-function baseColor(ch){ return M.palette[ch] || "#c8cdd6"; }   // identity palette (independent of letter color)
+function monochrome(){ const c=$("monoColor").value; for(const st of strands()) st.color.fill(c,0,st.n); render(); }
 
 /* ---------- selection ---------- */
-function updateSelInfo(){
-  if(CM.active){ const n=CM.selA.size+CM.selB.size; $("selInfo").textContent = n? `${n} selected` : "none selected"; return; }
-  const s=M.selected;
-  $("selInfo").textContent = s.size? `${s.size} selected` : "none selected";
-}
+function selCount(){ return strands().reduce((a,st)=>a+st.sel.size,0); }
+function clearSelection(){ for(const st of strands()) st.sel.clear(); }
+function updateSelInfo(){ const n=selCount(); $("selInfo").textContent = n? `${n} selected` : "none selected"; }
 function updateBondInfo(){
   $("bondInfo").textContent = M.selBond.size? `${M.selBond.size} bond(s) selected` : "none selected";
 }
+// Internal request #2: rotate the selected bases rigidly by `deg` (positive = clockwise on screen,
+// since SVG y points down). Pivot is either the selection's centroid, or its "attachment point":
+// the midpoint of every selected base whose sequence neighbour is NOT selected — for a stem/branch
+// that's the midpoint of its base rung, so the stem swings about where it joins the rest. Applied
+// through the same offX/offY channel drag uses, so it composes with earlier manual moves.
+function rotateSelection(deg, pivotMode){
+  const sts=strands(), sel=[], edge=[];
+  for(const st of sts){
+    const isEdge=i=>(i>0 && !st.sel.has(i-1)) || (i<st.n-1 && !st.sel.has(i+1));
+    st.sel.forEach(i=>{
+      const p={st,i,x:effX(st,i),y:effY(st,i)}; sel.push(p);
+      // a base also counts if its (selected) pair partner is an edge — so a branch that starts at
+      // the strand's very 5'/3' end still pivots about its base-rung midpoint, not one rail
+      const j=st.pt[i];
+      if(isEdge(i) || (j!==-1 && st.sel.has(j) && isEdge(j))) edge.push(p);
+    });
+  }
+  if(!sel.length) return false;
+  const src = (pivotMode==='attach' && edge.length) ? edge : sel;
+  let px=0,py=0; for(const p of src){ px+=p.x; py+=p.y; } px/=src.length; py/=src.length;
+  const a=deg*Math.PI/180, c=Math.cos(a), s=Math.sin(a);
+  for(const p of sel){
+    const dx=p.x-px, dy=p.y-py;
+    p.st.offX[p.i]=(p.st.offX[p.i]||0) + (px+dx*c-dy*s - p.x);
+    p.st.offY[p.i]=(p.st.offY[p.i]||0) + (py+dx*s+dy*c - p.y);
+  }
+  render();
+  return true;
+}
 
-/* ---------- interaction: pan / zoom / select / drag-to-reposition ---------- */
+/* ---------- interaction: pan / zoom / select / drag / marquee ----------
+   On a base:  drag            = move its whole branch (paired) or itself (unpaired)
+               Alt+drag        = move just that base
+               Ctrl/⌘+drag     = move its PART (helix / loop ring / free run — see partIndicesIn)
+               Ctrl/⌘+click    = add/remove its part to/from the selection
+               drag a selected base while 2+ are selected = move the whole selection
+   Background: drag = pan · Shift+drag = rubber-band select (adds) · click = clear selection */
 let dragging=false, moved=false, lastX=0,lastY=0;
-let baseDrag=null;      // {branch:[idx,...], lastX, lastY, moved} while dragging a base/branch
+let baseDrag=null;      // {sets:[{s,idx[]}], lastX, lastY, moved, part:{s,idx[]}|null}
+let marquee=null;       // {x0,y0,x1,y1} in svg-local screen px while rubber-band selecting
 let suppressClick=false; // set when a drag just ended, so the trailing native "click" doesn't also select
+function svgLocal(e){ const r=svg.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+function drawMarquee(){
+  const r=document.createElementNS(SVGNS,"rect");
+  r.setAttribute("x",Math.min(marquee.x0,marquee.x1)); r.setAttribute("y",Math.min(marquee.y0,marquee.y1));
+  r.setAttribute("width",Math.abs(marquee.x1-marquee.x0)); r.setAttribute("height",Math.abs(marquee.y1-marquee.y0));
+  r.setAttribute("fill","rgba(91,140,255,0.12)"); r.setAttribute("stroke","#5b8cff");
+  r.setAttribute("stroke-dasharray","4,3"); r.setAttribute("pointer-events","none");
+  svg.appendChild(r);
+}
+function finishMarquee(){
+  const x0=Math.min(marquee.x0,marquee.x1), x1=Math.max(marquee.x0,marquee.x1);
+  const y0=Math.min(marquee.y0,marquee.y1), y1=Math.max(marquee.y0,marquee.y1);
+  const sts=strands(), P=displayPoints(sts);
+  sts.forEach((st,s)=>{ for(let i=0;i<st.n;i++){
+    const X=M.panX+P[s][i].x*M.zoom, Y=M.panY+P[s][i].y*M.zoom;
+    if(X>=x0&&X<=x1&&Y>=y0&&Y<=y1) st.sel.add(i);
+  }});
+  marquee=null; updateSelInfo(); render();
+}
+function togglePart(s,idx){
+  const st=strands()[s]; const all=idx.every(i=>st.sel.has(i));
+  idx.forEach(i=> all ? st.sel.delete(i) : st.sel.add(i));
+  updateSelInfo(); render();
+}
+svg.addEventListener("contextmenu",e=>{ if(e.target.closest(".base-hit")) e.preventDefault(); }); // macOS Ctrl+click
 svg.addEventListener("mousedown",e=>{
   const baseEl=e.target.closest(".base-hit");
   if(baseEl){
-    const i=parseInt(baseEl.dataset.i);
-    const strand=CM.active ? baseEl.dataset.strand : null;
-    const pt = strand==='B' ? CM.ptB : (strand==='A' ? CM.ptA : M.pt);
-    // plain drag = move the whole branch rooted at this base's pair; Alt+drag = move just this base
-    baseDrag={ strand, branch:branchIndicesIn(pt, i, !e.altKey), lastX:e.clientX, lastY:e.clientY, moved:false };
+    const s=+baseEl.dataset.s, i=+baseEl.dataset.i, sts=strands(), st=sts[s];
+    let sets, part=null;
+    if(e.ctrlKey||e.metaKey){ part={s,idx:partIndicesIn(st.pt,i)}; sets=[part]; }
+    else if(!e.altKey && st.sel.has(i) && selCount()>1) sets=sts.map((t,k)=>({s:k,idx:[...t.sel]}));
+    else sets=[{s, idx:branchIndicesIn(st.pt, i, !e.altKey)}];
+    baseDrag={sets, part, lastX:e.clientX, lastY:e.clientY, moved:false};
+    e.preventDefault();
     return;                                   // don't also start a canvas pan
   }
   if(e.target.closest(".bond-hit")) return;    // click handler manages bond selection
+  if(e.shiftKey && hasContent()){ const p=svgLocal(e); marquee={x0:p.x,y0:p.y,x1:p.x,y1:p.y}; return; }
   dragging=true; moved=false; lastX=e.clientX; lastY=e.clientY;
   svg.classList.add("panning");
 });
@@ -1276,20 +1413,19 @@ window.addEventListener("mousemove",e=>{
     const sdx=e.clientX-baseDrag.lastX, sdy=e.clientY-baseDrag.lastY;
     if(Math.abs(sdx)>1||Math.abs(sdy)>1) baseDrag.moved=true;
     if(baseDrag.moved){
-      // screen-space mouse delta -> model-space delta: undo the render pipeline's zoom, then its
-      // rotation (render draws rotate(M.rot) first, then scale(zoom)+translate(pan) — so converting
-      // a delta back to model space undoes them in reverse order).
+      // screen-space delta -> model-space delta: undo zoom, then undo the view rotation
       const a=-M.rot*Math.PI/180, cosA=Math.cos(a), sinA=Math.sin(a);
       const zx=sdx/M.zoom, zy=sdy/M.zoom;
       const mdx=zx*cosA-zy*sinA, mdy=zx*sinA+zy*cosA;
-      const offX = baseDrag.strand==='B' ? CM.offXB : baseDrag.strand==='A' ? CM.offXA : M.offX;
-      const offY = baseDrag.strand==='B' ? CM.offYB : baseDrag.strand==='A' ? CM.offYA : M.offY;
-      for(const idx of baseDrag.branch){ offX[idx]=(offX[idx]||0)+mdx; offY[idx]=(offY[idx]||0)+mdy; }
+      const sts=strands();
+      for(const {s,idx} of baseDrag.sets){ const st=sts[s];
+        for(const k of idx){ st.offX[k]=(st.offX[k]||0)+mdx; st.offY[k]=(st.offY[k]||0)+mdy; } }
       baseDrag.lastX=e.clientX; baseDrag.lastY=e.clientY;
       render();
     }
     return;
   }
+  if(marquee){ const p=svgLocal(e); marquee.x1=p.x; marquee.y1=p.y; render(); return; }
   if(!dragging) return;
   moved=true;
   M.panX+=e.clientX-lastX; M.panY+=e.clientY-lastY;
@@ -1298,34 +1434,28 @@ window.addEventListener("mousemove",e=>{
 window.addEventListener("mouseup",e=>{
   if(baseDrag){
     if(baseDrag.moved){ suppressClick=true; touch(); }   // persist the new offsets
+    else if(baseDrag.part){ suppressClick=true; togglePart(baseDrag.part.s, baseDrag.part.idx); }
     baseDrag=null; return;
   }
+  if(marquee){ finishMarquee(); suppressClick=true; return; }
   if(dragging && !moved && !e.target.closest(".base-hit") && !e.target.closest(".bond-hit")){
-    if(CM.active){ CM.selA.clear(); CM.selB.clear(); } else { M.selected.clear(); M.selBond.clear(); }
+    clearSelection(); M.selBond.clear();
     updateSelInfo(); updateBondInfo(); render();
   }
   dragging=false; svg.classList.remove("panning");
 });
 svg.addEventListener("click",e=>{
-  if(suppressClick){ suppressClick=false; return; }   // this click just ended a base/branch drag
+  if(suppressClick){ suppressClick=false; return; }   // this click just ended a drag / part-select / marquee
   const base=e.target.closest(".base-hit");
   if(base){
-    const i=parseInt(base.dataset.i);
-    if(CM.active){
-      const strand=base.dataset.strand;
-      const sel = strand==='A' ? CM.selA : CM.selB;
-      const other = strand==='A' ? CM.selB : CM.selA;
-      if(e.shiftKey){ sel.has(i)?sel.delete(i):sel.add(i); }
-      else { const only = sel.size===1 && sel.has(i) && other.size===0; CM.selA.clear(); CM.selB.clear(); if(!only) sel.add(i); }
-      updateSelInfo(); render(); return;
-    }
-    if(e.shiftKey){ M.selected.has(i)?M.selected.delete(i):M.selected.add(i); }
-    else { const only=M.selected.size===1&&M.selected.has(i); M.selected.clear(); if(!only)M.selected.add(i); }
+    const s=+base.dataset.s, i=+base.dataset.i, st=strands()[s];
+    if(e.shiftKey){ st.sel.has(i)?st.sel.delete(i):st.sel.add(i); }
+    else { const only=selCount()===1 && st.sel.has(i); clearSelection(); if(!only) st.sel.add(i); }
     updateSelInfo(); render(); return;
   }
   const bond=e.target.closest(".bond-hit");
   if(bond){
-    const i=parseInt(bond.dataset.i);
+    const i=+bond.dataset.i;
     if(e.shiftKey){ M.selBond.has(i)?M.selBond.delete(i):M.selBond.add(i); }
     else { const only=M.selBond.size===1&&M.selBond.has(i); M.selBond.clear(); if(!only)M.selBond.add(i); }
     updateBondInfo(); render();
@@ -1333,117 +1463,26 @@ svg.addEventListener("click",e=>{
 });
 svg.addEventListener("wheel",e=>{
   e.preventDefault();
-  const rect=svg.getBoundingClientRect();
-  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  const {x:mx,y:my}=svgLocal(e);
   const factor=Math.exp(-e.deltaY*0.0015);
   const nz=Math.max(0.05,Math.min(30,M.zoom*factor));
-  // zoom about cursor
-  M.panX=mx-(mx-M.panX)*(nz/M.zoom);
+  M.panX=mx-(mx-M.panX)*(nz/M.zoom);     // zoom about cursor
   M.panY=my-(my-M.panY)*(nz/M.zoom);
   M.zoom=nz; render();
 },{passive:false});
 
-/* ---------- export ---------- */
+/* ---------- export (same scene as the canvas, serialized) ---------- */
 function buildExportSVG(){
-  if(CM.active) return buildComplexExportSVG();
-  const pts=displayCoords();
-  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
-  for(const p of pts){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
-    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
-  const pad=M.font*2.2; minx-=pad;miny-=pad;maxx+=pad;maxy+=pad;
-  const W=maxx-minx, H=maxy-miny;
-  const font=M.font;
-  const backColor=$("backColor").value, pairColor=$("pairColor").value;
-  const showBack=$("cBack").checked, showPair=$("cPair").checked,
-        showCircle=$("cCircle").checked, showLetter=$("cLetter").checked,
-        bold=$("cBold").checked, transparent=$("cTransparent").checked;
-  const frameMode=$("frameMode").value, fillMode=$("fillMode").value,
-        frameColor=$("frameColor").value, fillColor=$("fillColor").value;
-  const circR=font*0.72, circW=+$("frameW").value;
-  const numEvery=parseInt($("numEvery").value)||0;
-  const gap=font*0.62;
-  const S=[];
-  S.push(`<svg xmlns="${SVGNS}" viewBox="${minx} ${miny} ${W} ${H}" width="${W}" height="${H}">`);
-  if(!transparent)
-    S.push(`<rect x="${minx}" y="${miny}" width="${W}" height="${H}" fill="${$("bgColor").value}"/>`);
-  const seg=(p,q,pad)=>{const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
-    return [p.x+ux*pad,p.y+uy*pad,q.x-ux*pad,q.y-uy*pad];};
-  if(showPair) for(let i=0;i<M.n;i++){const j=M.pt[i]; if(j>i){
-    const[x1,y1,x2,y2]=seg(pts[i],pts[j],gap);
-    S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${M.bondColor[i]||pairColor}" stroke-width="${Math.max(1.4,font*0.11)}" stroke-linecap="round"/>`);}}
-  if(showBack) for(let i=0;i<M.n-1;i++){const[x1,y1,x2,y2]=seg(pts[i],pts[i+1],gap*0.92);
-    S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${backColor}" stroke-width="${Math.max(1,font*0.08)}" stroke-linecap="round"/>`);}
-  // layer 1: all circles first
-  if(showCircle) for(let i=0;i<M.n;i++){const p=pts[i],bc=baseColor(M.seq[i]);
-    const fillC = M.circleColor[i] || (fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
-    const strokeC = frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
-    const sw = strokeC!=="none"?` stroke="${strokeC}" stroke-width="${circW}"`:"";
-    S.push(`<circle cx="${p.x}" cy="${p.y}" r="${circR}" fill="${fillC}"${sw}/>`);
-  }
-  // layer 2: numbers + letters always on top
-  for(let i=0;i<M.n;i++){const p=pts[i],col=M.color[i];
-    if(numEvery>0 && ((i+1)%numEvery===0||i===0))
-      S.push(`<text x="${p.x}" y="${p.y-font*0.95}" text-anchor="middle" font-size="${font*0.5}" fill="#8a93a3" font-family="ui-monospace,monospace">${i+1}</text>`);
-    if(showLetter)
-      S.push(`<text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace,Menlo,monospace" font-size="${font}" font-weight="${bold?700:400}" fill="${col}">${M.seq[i]}</text>`);
+  const b=contentBox();
+  const S=[`<svg xmlns="${SVGNS}" viewBox="${b.minx} ${b.miny} ${b.W} ${b.H}" width="${b.W}" height="${b.H}">`];
+  if(!$("cTransparent").checked)
+    S.push(`<rect x="${b.minx}" y="${b.miny}" width="${b.W}" height="${b.H}" fill="${$("bgColor").value}"/>`);
+  for(const el of buildScene(false)){
+    const attrs=Object.entries(el.a).map(([k,v])=>`${k}="${v}"`).join(' ');
+    S.push(el.text===undefined ? `<${el.t} ${attrs}/>` : `<${el.t} ${attrs}>${el.text}</${el.t}>`);
   }
   S.push(`</svg>`);
-  return {svg:S.join("\n"),W,H};
-}
-// mirrors buildExportSVG()'s structure but for two strands + duplex — numbering isn't exported
-// for complexes in this version, same scope cut as renderComplex().
-function buildComplexExportSVG(){
-  const {ptsA,ptsB}=complexDisplayCoords();
-  let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
-  for(const p of ptsA.concat(ptsB)){minx=Math.min(minx,p.x);miny=Math.min(miny,p.y);
-    maxx=Math.max(maxx,p.x);maxy=Math.max(maxy,p.y);}
-  const pad=M.font*2.2; minx-=pad;miny-=pad;maxx+=pad;maxy+=pad;
-  const W=maxx-minx,H=maxy-miny, font=M.font;
-  const backColor=$("backColor").value, pairColor=$("pairColor").value, dupColor=$("dupColor").value;
-  const showBack=$("cBack").checked, showPair=$("cPair").checked, showCircle=$("cCircle").checked,
-        showLetter=$("cLetter").checked, bold=$("cBold").checked, transparent=$("cTransparent").checked;
-  const frameMode=$("frameMode").value, fillMode=$("fillMode").value, frameColor=$("frameColor").value, fillColor=$("fillColor").value;
-  const circR=font*0.72, circW=+$("frameW").value, gap=font*0.62;
-  const region=complexes[CM.idx].region;
-  const docA=docs[complexes[CM.idx].docA], docB=docs[complexes[CM.idx].docB];
-  const S=[];
-  S.push(`<svg xmlns="${SVGNS}" viewBox="${minx} ${miny} ${W} ${H}" width="${W}" height="${H}">`);
-  if(!transparent) S.push(`<rect x="${minx}" y="${miny}" width="${W}" height="${H}" fill="${$("bgColor").value}"/>`);
-  const seg=(p,q,pad)=>{const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
-    return [p.x+ux*pad,p.y+uy*pad,q.x-ux*pad,q.y-uy*pad];};
-  if(showPair) for(let k=0;k<CM.dupLen;k++){
-    const ai=region.aStart+k, bi=region.bEnd-k;
-    const [x1,y1,x2,y2]=seg(ptsA[ai],ptsB[bi],gap);
-    S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${dupColor}" stroke-width="${Math.max(1.6,font*0.13)}" stroke-linecap="round"/>`);
-  }
-  function strandBonds(pts,pt,n,bondColorMap){
-    if(!showPair) return;
-    for(let i=0;i<n;i++){const j=pt[i]; if(j<=i) continue;
-      const [x1,y1,x2,y2]=seg(pts[i],pts[j],gap);
-      S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${(bondColorMap&&bondColorMap[i])||pairColor}" stroke-width="${Math.max(1.4,font*0.11)}" stroke-linecap="round"/>`);}
-  }
-  strandBonds(ptsA,CM.ptA,CM.nA,docA.bondColor); strandBonds(ptsB,CM.ptB,CM.nB,docB.bondColor);
-  function backbone(pts,n){ if(!showBack) return;
-    for(let i=0;i<n-1;i++){const [x1,y1,x2,y2]=seg(pts[i],pts[i+1],gap*0.92);
-      S.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${backColor}" stroke-width="${Math.max(1,font*0.08)}" stroke-linecap="round"/>`);} }
-  backbone(ptsA,CM.nA); backbone(ptsB,CM.nB);
-  function circles(pts,seq,n,colorArr,circleColorMap){
-    if(!showCircle) return;
-    for(let i=0;i<n;i++){const p=pts[i],bc=baseColor(seq[i]);
-      const fillC=(circleColorMap&&circleColorMap[i])||(fillMode==='none'?"none":(fillMode==='base'?bc:fillColor));
-      const strokeC=frameMode==='none'?"none":(frameMode==='base'?bc:frameColor);
-      const sw=strokeC!=="none"?` stroke="${strokeC}" stroke-width="${circW}"`:"";
-      S.push(`<circle cx="${p.x}" cy="${p.y}" r="${circR}" fill="${fillC}"${sw}/>`);}
-  }
-  circles(ptsA,CM.seqA,CM.nA,docA.color,docA.circleColor); circles(ptsB,CM.seqB,CM.nB,docB.color,docB.circleColor);
-  function letters(pts,seq,n,colorArr){
-    if(!showLetter) return;
-    for(let i=0;i<n;i++){const p=pts[i];
-      S.push(`<text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" font-family="ui-monospace,Menlo,monospace" font-size="${font}" font-weight="${bold?700:400}" fill="${(colorArr&&colorArr[i])||'#c8cdd6'}">${seq[i]}</text>`);}
-  }
-  letters(ptsA,CM.seqA,CM.nA,docA.color); letters(ptsB,CM.seqB,CM.nB,docB.color);
-  S.push(`</svg>`);
-  return {svg:S.join("\n"),W,H};
+  return {svg:S.join("\n"),W:b.W,H:b.H};
 }
 function download(name,blob){
   const url=URL.createObjectURL(blob);
@@ -1470,7 +1509,7 @@ const LIMIT=20;
 let docs=[]; let active=-1;
 let complexes=[];   // Feature #4: two-strand hybridization complexes (see CM for live working state)
 const STYLE_IDS=['font','cLetter','cBold','cCircle','frameMode','frameColor','frameW',
-  'fillMode','fillColor','cBack','cPair','tailMode','backColor','pairColor','numEvery',
+  'fillMode','fillColor','cBack','cPair','tailMode','backColor','pairColor','dupColor','numEvery','numOffset',
   'bgColor','cTransparent'];
 function elVal(id){ const e=$(id); return e.type==='checkbox'?e.checked:e.value; }
 function setVal(id,v){ const e=$(id); if(e.type==='checkbox') e.checked=!!v; else e.value=v; }
@@ -1485,20 +1524,23 @@ function applyStyle(s){
   if(s.palette) document.querySelectorAll('input[data-id]').forEach(inp=>{ if(s.palette[inp.dataset.id]) inp.value=s.palette[inp.dataset.id]; });
   M.font=+$("font").value; $("fontVal").textContent=M.font+" px";
   $("frameWVal").textContent=$("frameW").value+" px";
-  M.palette={}; document.querySelectorAll('input[data-id]').forEach(inp=>M.palette[inp.dataset.id]=inp.value);
+  readPalette();
   $("stage").style.background=$("bgColor").value;
 }
 function newDoc(name,seq,dot){ return {name:name||'seq', seq:seq||'', dot:dot||'', color:[], circleColor:{}, bondColor:{}, offset:null, view:null, style:null}; }
 function uniform(){ return $("uniformStyle").checked; }
-function applyPaletteNoRender(){
-  for(const id of ['A','U','T','G','C']) M.palette[id]=document.querySelector(`input[data-id=${id}]`).value;
-  for(let i=0;i<M.n;i++) M.color[i]=M.palette[M.seq[i]]||"#c8cdd6";
-}
+function setRotUI(){ $("rot").value=M.rot; $("rotVal").textContent=M.rot+"°"; }
 function blankCanvas(){
   M.n=0; M.selected.clear(); M.selBond.clear(); M.circleColor={}; M.bondColor={};
-  updateSelInfo(); updateBondInfo(); $("badge").textContent="—"; render(); updateExportInfo();
+  updateSelInfo(); updateBondInfo(); render();
 }
+// Writes the live view back into its backing store. In complex view, M still holds whatever
+// single sequence was open BEFORE the complex — and the complex has been editing docs[] colors
+// directly — so writing M back then would clobber those edits with stale data. That used to
+// happen via Build / Add / Import / switching docs while a complex was open; routing it here
+// makes it impossible to get wrong at a call site.
 function saveActive(){
+  if(CM.active) return saveActiveComplex();
   if(active<0||active>=docs.length) return;
   const d=docs[active];
   d.seq=$("seq").value; d.dot=$("dot").value;
@@ -1515,6 +1557,16 @@ function saveActiveComplex(){
   c.offsetB={x:(CM.offXB||[]).slice(), y:(CM.offYB||[]).slice()};
   c.view={zoom:M.zoom,panX:M.panX,panY:M.panY,rot:M.rot};
 }
+function leaveComplex(){ if(!CM.active) return; saveActiveComplex(); CM.active=false; renderComplexList(); }
+// Gives a doc a color[] of the right length (identity palette) if it doesn't already have one.
+function ensureDocColors(d, seq){
+  if(!d.color || d.color.length!==seq.length){ d.color=new Array(seq.length); for(let k=0;k<seq.length;k++) d.color[k]=M.palette[seq[k]]||FALLBACK_COLOR; }
+  if(!d.circleColor) d.circleColor={}; if(!d.bondColor) d.bondColor={};
+}
+function restoreOffsets(saved, n){
+  const ok=saved && saved.x && saved.x.length===n;
+  return ok ? [saved.x.slice(), saved.y.slice()] : [new Array(n).fill(0), new Array(n).fill(0)];
+}
 function applyDoc(i){                     // load doc i into UI + model (does NOT save previous)
   CM.active=false;                        // opening a plain sequence always leaves complex view
   active=i; const d=docs[i]; $("err").textContent="";
@@ -1523,28 +1575,28 @@ function applyDoc(i){                     // load doc i into UI + model (does NO
   if((d.seq||"").trim() && (d.dot||"").trim()){
     let parsed;
     try{ parsed=parseStructure(d.seq,d.dot); }
-    catch(e){ $("err").textContent="⚠ "+e; blankCanvas(); renderDocList(); return; }
-    M.seq=parsed.seq; M.n=parsed.n; M.pt=parsed.pt; M.pkPairs=parsed.pk;
+    catch(e){ $("err").textContent="⚠ "+e; blankCanvas(); renderDocList(); renderComplexList(); return; }
+    M.seq=parsed.seq; M.n=parsed.n; M.pt=parsed.pt; M.nonWC=parsed.nonWC;
     const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
-    M.x=lay.x; M.y=lay.y; M.color=new Array(M.n);
-    M.offX=new Array(M.n).fill(0); M.offY=new Array(M.n).fill(0);
-    if(d.offset && d.offset.x && d.offset.x.length===M.n){ M.offX=d.offset.x.slice(); M.offY=d.offset.y.slice(); }
+    M.x=lay.x; M.y=lay.y;
+    [M.offX,M.offY]=restoreOffsets(d.offset, M.n);
     M.selected.clear(); M.selBond.clear();
-    applyPaletteNoRender();
-    if(d.color && d.color.length===M.n) M.color=d.color.slice();
-    M.circleColor={...(d.circleColor||{})}; M.bondColor={...(d.bondColor||{})};
+    readPalette(); ensureDocColors(d, M.seq);
+    M.color=d.color.slice();
+    M.circleColor={...d.circleColor}; M.bondColor={...d.bondColor};
     updateSelInfo(); updateBondInfo();
-    if(d.view){ M.zoom=d.view.zoom; M.panX=d.view.panX; M.panY=d.view.panY; M.rot=d.view.rot;
-      $("rot").value=M.rot; $("rotVal").textContent=M.rot+"°"; render(); }
+    if(d.view){ M.zoom=d.view.zoom; M.panX=d.view.panX; M.panY=d.view.panY; M.rot=d.view.rot; setRotUI(); render(); }
     else { M.rot=+($("rot").value||0); fit(); }
   } else {
     blankCanvas();
     if((d.seq||"").trim() && !(d.dot||"").trim())
       $("err").textContent="Add a dot-bracket structure for this sequence, then Render.";
   }
-  renderDocList();
+  renderDocList(); renderComplexList();
 }
-function switchDoc(i){ if(i===active) return; saveActive(); applyDoc(i); persist(); }
+// Clicking the already-active sequence while a complex is open now returns to that sequence
+// (it used to be a no-op, leaving no way back to its single view except picking another doc).
+function switchDoc(i){ if(i===active && !CM.active) return; saveActive(); applyDoc(i); persist(); }
 function addDoc(seq,dot,name){
   if(docs.length>=LIMIT){ flashLimit(); return; }
   saveActive();
@@ -1558,8 +1610,8 @@ function deleteDoc(i){
   const beforeCx=complexes.length;
   complexes=complexes.filter(c=>c.docA!==i && c.docB!==i)
     .map(c=>({...c, docA:c.docA>i?c.docA-1:c.docA, docB:c.docB>i?c.docB-1:c.docB}));
-  if(complexes.length<beforeCx) $("docHint").textContent=`Removed ${beforeCx-complexes.length} complex(es) that used this sequence.`;
   applyDoc(active); pushHistory();
+  if(complexes.length<beforeCx) $("docHint").textContent=`Removed ${beforeCx-complexes.length} complex(es) that used this sequence.`;
 }
 function renameDoc(i){
   const v=prompt("Rename sequence:", docs[i].name||('seq '+(i+1)));
@@ -1574,47 +1626,29 @@ function newComplex(name,docA,docB,aStart,aEnd,bStart,bEnd,mode){
 }
 // loads complex i into CM + the shared view (M.zoom/pan/rot) and switches the canvas into complex mode
 function openComplex(i){
-  const c=complexes[i]; if(!c) return;
-  const docA=docs[c.docA], docB=docs[c.docB];
+  const c=complexes[i]; if(!c) return null;
   $("cxErr").textContent="";
-  if(!docA || !docB){ $("cxErr").textContent="One of this complex's sequences no longer exists."; return; }
-  let pA,pB;
-  try{ pA=parseStructure(docA.seq,docA.dot); pB=parseStructure(docB.seq,docB.dot); }
-  catch(e){ $("cxErr").textContent="⚠ One of the strands is no longer valid: "+e; return; }
-  let lay;
-  try{
-    lay = c.mode==='side'
-      ? computeSideHybridLayout(pA.seq,pA.pt,pB.seq,pB.pt,c.region,SPACING,$("tailMode").value,$("tailMode").value)
-      : computeComplexLayout(pA.seq,pA.pt,pB.seq,pB.pt,c.region,SPACING,$("tailMode").value);
-  }
-  catch(e){ $("cxErr").textContent="⚠ "+e; return; }
+  const r=layoutComplex(c);
+  if(r.error){ $("cxErr").textContent=r.error; return null; }
+  saveActive();                           // flush the single view (or the complex we're leaving)
+  const {pA,pB,lay,docA,docB}=r;
   if(lay.warning) $("cxErr").textContent=lay.warning;
   CM.active=true; CM.idx=i;
-  CM.seqA=pA.seq; CM.nA=pA.n; CM.ptA=lay.ptA; CM.xA=lay.xA; CM.yA=lay.yA;
-  CM.seqB=pB.seq; CM.nB=pB.n; CM.ptB=lay.ptB; CM.xB=lay.xB; CM.yB=lay.yB;
+  CM.seqA=pA.seq; CM.nA=pA.n; CM.ptA=lay.ptA; CM.nonWCA=pA.nonWC; CM.xA=lay.xA; CM.yA=lay.yA;
+  CM.seqB=pB.seq; CM.nB=pB.n; CM.ptB=lay.ptB; CM.nonWCB=pB.nonWC; CM.xB=lay.xB; CM.yB=lay.yB;
   CM.dupLen=lay.dupLen;
-  CM.offXA=(c.offsetA&&c.offsetA.x.length===CM.nA)? c.offsetA.x.slice() : new Array(CM.nA).fill(0);
-  CM.offYA=(c.offsetA&&c.offsetA.y.length===CM.nA)? c.offsetA.y.slice() : new Array(CM.nA).fill(0);
-  CM.offXB=(c.offsetB&&c.offsetB.x.length===CM.nB)? c.offsetB.x.slice() : new Array(CM.nB).fill(0);
-  CM.offYB=(c.offsetB&&c.offsetB.y.length===CM.nB)? c.offsetB.y.slice() : new Array(CM.nB).fill(0);
+  [CM.offXA,CM.offYA]=restoreOffsets(c.offsetA, CM.nA);
+  [CM.offXB,CM.offYB]=restoreOffsets(c.offsetB, CM.nB);
   CM.selA=new Set(); CM.selB=new Set();
-  // make sure each strand's per-base color array exists and matches its current length
-  if(!docA.color || docA.color.length!==CM.nA){
-    docA.color=new Array(CM.nA); for(let k=0;k<CM.nA;k++) docA.color[k]=M.palette[CM.seqA[k]]||"#c8cdd6";
-  }
-  if(!docB.color || docB.color.length!==CM.nB){
-    docB.color=new Array(CM.nB); for(let k=0;k<CM.nB;k++) docB.color[k]=M.palette[CM.seqB[k]]||"#c8cdd6";
-  }
-  if(!docA.circleColor) docA.circleColor={}; if(!docB.circleColor) docB.circleColor={};
-  if(!docA.bondColor) docA.bondColor={}; if(!docB.bondColor) docB.bondColor={};
+  readPalette(); ensureDocColors(docA, CM.seqA); ensureDocColors(docB, CM.seqB);
   updateSelInfo(); updateBondInfo();
-  if(c.view){ M.zoom=c.view.zoom; M.panX=c.view.panX; M.panY=c.view.panY; M.rot=c.view.rot;
-    $("rot").value=M.rot; $("rotVal").textContent=M.rot+"°"; render(); }
-  else fitComplex();
-  renderComplexList();
+  if(c.view){ M.zoom=c.view.zoom; M.panX=c.view.panX; M.panY=c.view.panY; M.rot=c.view.rot; setRotUI(); render(); }
+  else fit();
+  renderComplexList(); renderDocList();
+  return lay;
 }
 function deleteComplex(i){
-  if(CM.active) saveActiveComplex();
+  saveActive();
   const wasActive = CM.active && CM.idx===i;
   complexes.splice(i,1);
   if(CM.active){
@@ -1629,7 +1663,7 @@ function renderComplexList(){
   complexes.forEach((c,i)=>{
     const row=document.createElement('div'); row.className='docrow'+((CM.active&&CM.idx===i)?' active':'');
     const nm=document.createElement('span'); nm.className='docname';
-    nm.textContent=c.name||('complex '+(i+1));
+    nm.textContent=(c.name||('complex '+(i+1)))+(c.mode==='side'?' · side':'');
     nm.title="Click to open";
     nm.onclick=()=>{ openComplex(i); };
     const del=document.createElement('button'); del.className='docdel'; del.textContent='×'; del.title='Delete';
@@ -1640,9 +1674,11 @@ function renderComplexList(){
 }
 function refreshComplexPickers(){
   const sel=$("cxDocA"); if(!sel) return;             // panel not built yet
-  const opts=docs.map((d,i)=>`<option value="${i}">${(d.name||('seq '+(i+1)))}</option>`).join('');
   const prevA=$("cxDocA").value, prevB=$("cxDocB").value;
-  $("cxDocA").innerHTML=opts; $("cxDocB").innerHTML=opts;
+  for(const id of ["cxDocA","cxDocB"]){                // textContent, not innerHTML: names are user text
+    const s=$(id); s.innerHTML='';
+    docs.forEach((d,i)=>{ const o=document.createElement('option'); o.value=String(i); o.textContent=d.name||('seq '+(i+1)); s.appendChild(o); });
+  }
   if(docs[prevA]) $("cxDocA").value=prevA;
   if(docs.length>1){ $("cxDocB").value = (prevB && docs[prevB] && prevB!==prevA) ? prevB : String(Math.min(1,docs.length-1)); }
 }
@@ -1652,26 +1688,16 @@ $("cxBuild").onclick=()=>{
   if(!Number.isInteger(ai)||!Number.isInteger(bi)||!docs[ai]||!docs[bi]){ $("cxErr").textContent="Pick both strands."; return; }
   if(ai===bi){ $("cxErr").textContent="Strand A and B must be different sequences."; return; }
   saveActive();      // flush any pending edits in the textboxes before reading seq/dot
-  let pA,pB;
-  try{ pA=parseStructure(docs[ai].seq,docs[ai].dot); pB=parseStructure(docs[bi].seq,docs[bi].dot); }
-  catch(e){ $("cxErr").textContent="⚠ Both strands need a valid sequence+structure first: "+e; return; }
-  const aStart=(+$("cxAStart").value||1)-1, aEnd=(+$("cxAEnd").value||1)-1;
-  const bStart=(+$("cxBStart").value||1)-1, bEnd=(+$("cxBEnd").value||1)-1;
-  const mode=$("cxMode").value;
-  let lay;
-  try{
-    lay = mode==='side'
-      ? computeSideHybridLayout(pA.seq,pA.pt,pB.seq,pB.pt,{aStart,aEnd,bStart,bEnd},SPACING,$("tailMode").value,$("tailMode").value)
-      : computeComplexLayout(pA.seq,pA.pt,pB.seq,pB.pt,{aStart,aEnd,bStart,bEnd},SPACING,$("tailMode").value);
-  }
-  catch(e){ $("cxErr").textContent="⚠ "+e; return; }
-  const c=newComplex(`${docs[ai].name||'A'} × ${docs[bi].name||'B'}`, ai, bi, aStart,aEnd,bStart,bEnd, mode);
+  const c=newComplex(`${docs[ai].name||'A'} × ${docs[bi].name||'B'}`, ai, bi,
+    (+$("cxAStart").value||1)-1, (+$("cxAEnd").value||1)-1, (+$("cxBStart").value||1)-1, (+$("cxBEnd").value||1)-1,
+    $("cxMode").value);
+  const probe=layoutComplex(c);             // validate before adding it to the list
+  if(probe.error){ $("cxErr").textContent=probe.error; return; }
   complexes.push(c);
-  openComplex(complexes.length-1);
-  renderComplexList();
+  const lay=openComplex(complexes.length-1);
   const notes=[];
-  if(lay.broken>0) notes.push(`Built — ${lay.broken} existing base pair(s) touching or spanning the duplex region were broken.`);
-  if(lay.warning) notes.push(lay.warning);
+  if(lay && lay.broken>0) notes.push(`Built — ${lay.broken} existing base pair(s) touching or spanning the duplex region were broken.`);
+  if(lay && lay.warning) notes.push(lay.warning);
   if(notes.length) $("cxErr").textContent=notes.join(' ');
   pushHistory();
 };
@@ -1681,7 +1707,7 @@ function defaultHint(){ return `${docs.length}/${LIMIT} sequences · each keeps 
 function renderDocList(){
   const el=$("doclist"); el.innerHTML='';
   docs.forEach((d,i)=>{
-    const row=document.createElement('div'); row.className='docrow'+(i===active?' active':'');
+    const row=document.createElement('div'); row.className='docrow'+((i===active && !CM.active)?' active':'');
     const nm=document.createElement('span'); nm.className='docname';
     nm.textContent=d.name||('seq '+(i+1));
     if(!(d.seq&&d.seq.trim())){ const t=document.createElement('span'); t.className='emptytag'; t.textContent=' · empty'; nm.appendChild(t); }
@@ -1714,70 +1740,78 @@ function importFasta(text){
   pushHistory();
   if(recs.length>added) $("docHint").textContent=`Added ${added}; ${recs.length-added} skipped (limit ${LIMIT}).`;
 }
-function persist(){
-  try{
-    const slim=docs.map(d=>({name:d.name,seq:d.seq,dot:d.dot,color:d.color,circleColor:d.circleColor,bondColor:d.bondColor,offset:d.offset,view:d.view,style:d.style}));
-    const slimCx=complexes.map(c=>({name:c.name,docA:c.docA,docB:c.docB,region:c.region,offsetA:c.offsetA,offsetB:c.offsetB,view:c.view}));
-    localStorage.setItem("aptarender_docs", JSON.stringify({docs:slim,active,uniform:uniform(),complexes:slimCx}));
-  }catch(e){}
-}
-
-/* ---------- undo / redo ----------
-   History is a stack of full {docs, active, complexes, cmActive, cmIdx} snapshots, not a diff/patch
-   log — simplest to get right, at the cost of some memory for very long sessions (capped at
-   HISTORY_LIMIT). Every place that used to call persist() after a real edit now calls pushHistory()
-   instead (pushHistory persists too) — EXCEPT switchDoc() and beforeunload, which are deliberately
-   NOT undo points: switching which sequence you're looking at isn't an edit, and it would be
-   confusing for Ctrl+Z to silently jump you to a different tab instead of undoing your last change. */
-let history=[], histIndex=-1, restoringHistory=false;
-const HISTORY_LIMIT=100;
-function snapshotState(){
-  if(CM.active) saveActiveComplex(); else saveActive();
-  return JSON.stringify({
-    docs: docs.map(d=>({...d, color:(d.color||[]).slice(), circleColor:{...d.circleColor}, bondColor:{...d.bondColor},
+// ONE serializer for both localStorage and undo snapshots (they used to be two hand-written field
+// lists that had drifted: localStorage silently dropped each complex's `mode`, so a side-by-side
+// complex reloaded as Replace, and it never stored the uniform style, so style edits were lost on
+// reload whenever "Uniform style" was on — the default).
+function serializeState(){
+  saveActive();
+  return {
+    docs: docs.map(d=>({name:d.name, seq:d.seq, dot:d.dot, color:(d.color||[]).slice(),
+      circleColor:{...d.circleColor}, bondColor:{...d.bondColor},
       offset:d.offset?{x:d.offset.x.slice(),y:d.offset.y.slice()}:null,
       view:d.view?{...d.view}:null, style:d.style?JSON.parse(JSON.stringify(d.style)):null})),
     active,
-    complexes: complexes.map(c=>({...c, region:{...c.region},
+    complexes: complexes.map(c=>({name:c.name, docA:c.docA, docB:c.docB, mode:c.mode, region:{...c.region},
       offsetA:c.offsetA?{x:c.offsetA.x.slice(),y:c.offsetA.y.slice()}:null,
       offsetB:c.offsetB?{x:c.offsetB.x.slice(),y:c.offsetB.y.slice()}:null,
       view:c.view?{...c.view}:null})),
+    uniform: uniform(), style: readStyle(),
     cmActive:CM.active, cmIdx:CM.idx,
-  });
+  };
 }
+// Loads a serialized state (from localStorage or an undo snapshot) into docs/complexes/UI.
+function restoreState(st){
+  docs=st.docs.map(d=>Object.assign(newDoc(),d));
+  active=Math.min(Math.max(0,st.active|0), docs.length-1);
+  complexes=(st.complexes||[]).map(c=>({...newComplex(),...c}));
+  if(typeof st.uniform==='boolean') $("uniformStyle").checked=st.uniform;
+  if(st.style && uniform()) applyStyle(st.style);   // non-uniform: each doc's own style applies in applyDoc
+  CM.active=false;
+  applyDoc(active);
+  if(st.cmActive && complexes[st.cmIdx]) openComplex(st.cmIdx);
+  renderDocList(); renderComplexList();
+}
+function persist(){
+  try{ localStorage.setItem("aptarender_docs", JSON.stringify(serializeState())); }catch(e){}
+}
+
+/* ---------- undo / redo ----------
+   History is a stack of full serializeState() snapshots, not a diff/patch log — simplest to get
+   right, at the cost of some memory for very long sessions (capped at HISTORY_LIMIT). Snapshots
+   include the global style, so undo now reverts style edits in uniform mode too (it used to skip
+   them: the restore only re-applied per-doc styles, which uniform mode ignores). switchDoc() and
+   beforeunload deliberately are NOT undo points: switching which sequence you're looking at isn't
+   an edit. (Named histStack, not `history`, so it doesn't shadow window.history.) */
+let histStack=[], histIndex=-1, restoringHistory=false;
+const HISTORY_LIMIT=100;
+function snapshotState(){ return JSON.stringify(serializeState()); }
 function pushHistory(){
   if(restoringHistory) return;
   const snap=snapshotState();
-  if(histIndex>=0 && history[histIndex]===snap) return;    // no real change since last snapshot
-  history=history.slice(0,histIndex+1);                     // drop any redo branch
-  history.push(snap);
-  histIndex=history.length-1;
-  if(history.length>HISTORY_LIMIT){ history.shift(); histIndex--; }
+  if(histIndex>=0 && histStack[histIndex]===snap) return;   // no real change since last snapshot
+  histStack=histStack.slice(0,histIndex+1);                 // drop any redo branch
+  histStack.push(snap);
+  histIndex=histStack.length-1;
+  if(histStack.length>HISTORY_LIMIT){ histStack.shift(); histIndex--; }
   persist();
   updateHistButtons();
 }
 function applyHistorySnapshot(snap){
   restoringHistory=true;
-  try{
-    const st=JSON.parse(snap);
-    docs=st.docs.map(d=>Object.assign(newDoc(),d));
-    active=Math.min(Math.max(0,st.active|0), docs.length-1);
-    complexes=(st.complexes||[]).map(c=>({...newComplex(),...c}));
-    if(st.cmActive && complexes[st.cmIdx]) openComplex(st.cmIdx);
-    else { CM.active=false; applyDoc(active); }
-    renderDocList(); renderComplexList();
-    persist();
-  } finally { restoringHistory=false; }
+  try{ restoreState(JSON.parse(snap)); persist(); }
+  finally { restoringHistory=false; }
 }
-function undo(){ if(histIndex<=0) return; histIndex--; applyHistorySnapshot(history[histIndex]); updateHistButtons(); }
-function redo(){ if(histIndex>=history.length-1) return; histIndex++; applyHistorySnapshot(history[histIndex]); updateHistButtons(); }
+function undo(){ if(histIndex<=0) return; histIndex--; applyHistorySnapshot(histStack[histIndex]); updateHistButtons(); }
+function redo(){ if(histIndex>=histStack.length-1) return; histIndex++; applyHistorySnapshot(histStack[histIndex]); updateHistButtons(); }
 function updateHistButtons(){
   $("undoBtn").disabled = histIndex<=0;
-  $("redoBtn").disabled = histIndex>=history.length-1;
+  $("redoBtn").disabled = histIndex>=histStack.length-1;
 }
 
 function touch(){ pushHistory(); }   // capture per-doc / per-complex edits
 function renderActiveFromBoxes(){          // Render button / examples
+  leaveComplex();                          // the textboxes belong to the active single sequence
   if(active<0){ addDoc($("seq").value,$("dot").value); return; }
   build(); saveActive(); renderDocList(); pushHistory();
 }
@@ -1790,99 +1824,80 @@ $("fastaFile").onchange=async e=>{ const f=e.target.files[0]; if(!f) return;
   try{ importFasta(await f.text()); }catch(err){ $("docHint").textContent="Could not read that file."; }
   e.target.value=""; };
 $("uniformStyle").onchange=()=>{ if(!uniform()){ const s=readStyle(); docs.forEach(d=>d.style=s); } pushHistory(); };
-window.addEventListener("beforeunload",()=>{ saveActive(); persist(); });
+window.addEventListener("beforeunload",persist);
 $("seq").oninput=saveInput; $("dot").oninput=saveInput;
 $("clear").onclick=()=>{                  // blank the active sequence (keeps it in the list)
+  leaveComplex();
   $("seq").value=""; $("dot").value=""; $("err").textContent="";
-  if(active>=0){ const d=docs[active]; d.seq=""; d.dot=""; d.color=[]; d.circleColor={}; d.bondColor={}; d.view=null; }
+  if(active>=0){ const d=docs[active]; d.seq=""; d.dot=""; d.color=[]; d.circleColor={}; d.bondColor={}; d.view=null; d.offset=null; }
   blankCanvas(); renderDocList(); pushHistory(); $("seq").focus();
 };
-$("font").oninput=e=>{M.font=+e.target.value; $("fontVal").textContent=M.font+" px"; render();};
-$("rot").oninput=e=>{M.rot=+e.target.value; $("rotVal").textContent=M.rot+"°"; render();};
-$("reset0").onclick=()=>{M.rot=0;$("rot").value=0;$("rotVal").textContent="0°";render();};
+// Continuous controls (sliders, color pickers): re-render live on `input`, record ONE undo step on
+// `change` (fires when the drag / picker closes). Previously most of these never recorded an undo
+// step or persisted at all, so a font-size or color change was lost on reload.
+function liveControl(id, onInput){
+  $(id).oninput=e=>{ if(onInput) onInput(e); render(); };
+  $(id).onchange=()=>touch();
+}
+liveControl("font", e=>{ M.font=+e.target.value; $("fontVal").textContent=M.font+" px"; });
+liveControl("rot",  e=>{ M.rot=+e.target.value; $("rotVal").textContent=M.rot+"°"; });
+liveControl("frameW", e=>{ $("frameWVal").textContent=e.target.value+" px"; });
+liveControl("bgColor", e=>{ $("stage").style.background=e.target.value; });
+["frameColor","fillColor","backColor","pairColor","dupColor","numEvery","numOffset"].forEach(id=>liveControl(id));
+document.querySelectorAll("input[data-id]").forEach(inp=>{
+  inp.oninput=()=>{ M.palette[inp.dataset.id]=inp.value; render(); };   // identity colors (circles "by base")
+  inp.onchange=()=>touch();
+});
+$("reset0").onclick=()=>{ M.rot=0; setRotUI(); render(); touch(); };
 $("fit").onclick=fit;
 $("resetPositions").onclick=()=>{
-  if(CM.active){ CM.offXA.fill(0); CM.offYA.fill(0); CM.offXB.fill(0); CM.offYB.fill(0); }
-  else { M.offX.fill(0); M.offY.fill(0); }
+  for(const st of strands()){ st.offX.fill(0); st.offY.fill(0); }
   render(); touch();
 };
 $("undoBtn").onclick=undo;
 $("redoBtn").onclick=redo;
 window.addEventListener("keydown",e=>{
-  const tag=(document.activeElement && document.activeElement.tagName)||"";
-  if(tag==="TEXTAREA"||tag==="INPUT") return;   // let native undo work while typing
+  // only defer to the browser's own undo while focus is in a TEXT field — a focused slider or color
+  // picker used to swallow Ctrl+Z here too, right after you'd dragged it
+  const el=document.activeElement;
+  if(el && (el.tagName==="TEXTAREA" || (el.tagName==="INPUT" && /^(text|number|search)$/.test(el.type)))) return;
   const k=e.key.toLowerCase();
   if((e.ctrlKey||e.metaKey) && !e.shiftKey && k==='z'){ e.preventDefault(); undo(); }
   else if((e.ctrlKey||e.metaKey) && (k==='y' || (e.shiftKey && k==='z'))){ e.preventDefault(); redo(); }
 });
-$("applyId").onclick=()=>{
-  for(const id of ['A','U','T','G','C']) M.palette[id]=document.querySelector(`input[data-id=${id}]`).value;
-  if(CM.active){
-    const cx=complexes[CM.idx], docA=docs[cx.docA], docB=docs[cx.docB];
-    for(let i=0;i<CM.nA;i++) docA.color[i]=M.palette[CM.seqA[i]]||"#c8cdd6";
-    for(let i=0;i<CM.nB;i++) docB.color[i]=M.palette[CM.seqB[i]]||"#c8cdd6";
-    render();
-  } else applyPalette();
-  touch();
-};
-$("mono").onclick=()=>{
-  const c=$("monoColor").value;
-  if(CM.active){
-    const cx=complexes[CM.idx], docA=docs[cx.docA], docB=docs[cx.docB];
-    for(let i=0;i<CM.nA;i++) docA.color[i]=c;
-    for(let i=0;i<CM.nB;i++) docB.color[i]=c;
-    render();
-  } else monochrome();
-  touch();
-};
+$("applyId").onclick=()=>{ applyPalette(); touch(); };
+$("mono").onclick=()=>{ monochrome(); touch(); };
 $("applySel").onclick=()=>{
   const c=$("selColor").value;
-  if(CM.active){
-    const cx=complexes[CM.idx], docA=docs[cx.docA], docB=docs[cx.docB];
-    CM.selA.forEach(i=>docA.color[i]=c); CM.selB.forEach(i=>docB.color[i]=c);
-  } else M.selected.forEach(i=>M.color[i]=c);
+  for(const st of strands()) st.sel.forEach(i=>st.color[i]=c);
   render(); touch();
 };
 $("applySelCircle").onclick=()=>{
   const c=$("selCircleColor").value;
-  if(CM.active){
-    const cx=complexes[CM.idx], docA=docs[cx.docA], docB=docs[cx.docB];
-    CM.selA.forEach(i=>docA.circleColor[i]=c); CM.selB.forEach(i=>docB.circleColor[i]=c);
-  } else M.selected.forEach(i=>M.circleColor[i]=c);
+  for(const st of strands()) st.sel.forEach(i=>st.circleColor[i]=c);
   render(); touch();
 };
 $("resetCircle").onclick=()=>{
-  if(CM.active){ const cx=complexes[CM.idx]; docs[cx.docA].circleColor={}; docs[cx.docB].circleColor={}; }
-  else M.circleColor={};
+  for(const st of strands()) for(const k in st.circleColor) delete st.circleColor[k];
   render(); touch();
 };
-$("selCircleColor").oninput=()=>{};
-$("selAll").onclick=()=>{
-  if(CM.active){ CM.selA.clear();CM.selB.clear();
-    for(let i=0;i<CM.nA;i++)CM.selA.add(i); for(let i=0;i<CM.nB;i++)CM.selB.add(i);
-    updateSelInfo(); render(); return; }
-  M.selected.clear();for(let i=0;i<M.n;i++)M.selected.add(i);updateSelInfo();render();
-};
-$("selNone").onclick=()=>{
-  if(CM.active){ CM.selA.clear(); CM.selB.clear(); updateSelInfo(); render(); return; }
-  M.selected.clear();updateSelInfo();render();
+$("selAll").onclick=()=>{ for(const st of strands()) for(let i=0;i<st.n;i++) st.sel.add(i); updateSelInfo(); render(); };
+$("selNone").onclick=()=>{ clearSelection(); updateSelInfo(); render(); };
+$("zoomSel").onclick=zoomToSelection;
+$("rotSelGo").onclick=()=>{
+  const deg=parseFloat($("rotSelDeg").value);
+  if(!Number.isFinite(deg)){ $("rotSelInfo").textContent="Enter an angle in degrees."; return; }
+  if(rotateSelection(deg,$("rotSelPivot").value)){ $("rotSelInfo").textContent=""; touch(); }
+  else $("rotSelInfo").textContent="Select some bases first (click, Shift+drag, or Ctrl/⌘+click a part).";
 };
 // H-bonds (single-sequence mode only — complexes don't support per-bond click-select in this version)
 $("applyBond").onclick=()=>{const c=$("bondColor").value; M.selBond.forEach(i=>M.bondColor[i]=c); render(); touch();};
 $("bondAll").onclick=()=>{M.selBond.clear();for(let i=0;i<M.n;i++)if(M.pt[i]>i)M.selBond.add(i);updateBondInfo();render();};
 $("bondReset").onclick=()=>{M.bondColor={};M.selBond.clear();updateBondInfo();render(); touch();};
-// toggles that only re-render
-["cCircle","cBack","cPair","cLetter","cBold","frameMode","fillMode"].forEach(id=>$(id).onchange=()=>{render(); touch();});
+// discrete toggles that only re-render
+["cCircle","cBack","cPair","cLetter","cBold","frameMode","fillMode","cTransparent"].forEach(id=>$(id).onchange=()=>{render(); touch();});
 $("tailMode").onchange=()=>{relayout(); touch();};
-$("numEvery").oninput=render;
-$("frameColor").oninput=render; $("fillColor").oninput=render;
-$("frameW").oninput=e=>{$("frameWVal").textContent=e.target.value+" px"; render();};
-$("monoColor").oninput=()=>{};
-$("backColor").oninput=render; $("pairColor").oninput=render;
-$("dupColor").oninput=render;
 $("pngScale").oninput=updateExportInfo;
-$("bgColor").oninput=e=>{$("stage").style.background=e.target.value; render();};
-document.querySelectorAll("input[data-id]").forEach(inp=>inp.oninput=()=>{ M.palette[inp.dataset.id]=inp.value; render(); });
 
 /* examples — load into the active sequence */
 $("ex1").onclick=()=>{                 // simple hairpin with a bulge
@@ -1897,7 +1912,7 @@ $("ex2").onclick=()=>{                 // three-way multiloop
 };
 
 /* tabs (top navigator) */
-const SEL_TABS=new Set(['letters','circles','complex']);   // panes where base-selection controls matter
+const SEL_TABS=new Set(['layout','letters','circles','complex']);   // panes where base-selection controls matter
 document.querySelectorAll('#tabs .tab').forEach(btn=>{
   btn.onclick=()=>{
     const tab=btn.dataset.tab;
@@ -1941,22 +1956,18 @@ $("selbar").style.display='none';   // hidden on the Input tab at start
     handle.classList.remove("dragging");
     document.body.classList.remove("resizing-panel");
     try{ localStorage.setItem("aptarender_panelw", String(Math.round(panel.getBoundingClientRect().width))); }catch(e){}
-    if(M.n||CM.active) fit();
+    if(hasContent()) fit();
   });
 })();
 
 /* initial */
-window.addEventListener("resize",()=>{ if(M.n) render(); });
+window.addEventListener("resize",()=>{ if(hasContent()) render(); });
 $("stage").style.background=$("bgColor").value;
 (function init(){
   let saved=null;
   try{ saved=JSON.parse(localStorage.getItem("aptarender_docs")||"null"); }catch(e){}
   if(saved && saved.docs && saved.docs.length){
-    docs=saved.docs.map(d=>Object.assign(newDoc(),d));
-    if(typeof saved.uniform==='boolean') $("uniformStyle").checked=saved.uniform;
-    active=Math.min(Math.max(0,saved.active|0),docs.length-1);
-    complexes=(saved.complexes||[]).map(c=>({...newComplex(),...c}));
-    applyDoc(active);
+    restoreState(saved);
   } else {
     // migrate old single-seq storage, else load the demo
     let s=null,d=null;
@@ -1966,7 +1977,7 @@ $("stage").style.background=$("bgColor").value;
     active=0; applyDoc(0); persist();
   }
   renderDocList(); renderComplexList();
-  history=[snapshotState()]; histIndex=0; updateHistButtons();   // seed the undo baseline
+  histStack=[snapshotState()]; histIndex=0; updateHistButtons();   // seed the undo baseline
 })();
 </script>
 </body>
