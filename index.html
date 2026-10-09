@@ -150,7 +150,7 @@
       <h2>Active sequence &amp; structure</h2>
       <label>Sequence (A/U/T/G/C)</label>
       <textarea id="seq" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
-      <label>Dot-bracket structure — ( ) for Watson-Crick pairs; [ ] or { } for non-WC pairs (drawn dashed)</label>
+      <label>Structure</label>
       <textarea id="dot" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
       <div class="row" style="margin-top:9px">
         <button class="primary" id="render">Render</button>
@@ -160,7 +160,8 @@
       </div>
       <div id="err"></div>
       <div class="hint">Use nested <code>( )</code> and <code>.</code> for the structure.
-        Drag the background to pan, Shift+drag to box-select, scroll to zoom, drag a base to reposition its branch.</div>
+        Drag the background to pan, Shift+drag to box-select, scroll to zoom, drag a base to reposition its branch.
+        Dot-bracket structure — ( ) for Watson-Crick pairs; [ ] or { } for non-WC pairs (drawn dashed)</div>
     </div>
   </section>
 
@@ -186,6 +187,19 @@
       <div class="row" style="margin-top:8px">
         <button class="mini" id="resetPositions">Reset all positions</button>
       </div>
+    </div>
+    <div class="grp">
+      <h2>Ring rotation (Varna-style)</h2>
+      <div class="hint" style="margin-top:0">
+        1. <b>Ctrl/⌘+click</b> an unpaired base of a loop to select its ring.<br>
+        2. Click <b>Lock ring</b>.<br>
+        3. <b>Drag any helix</b> attached to the ring (or the rest of the molecule) to swing it around the
+        ring. The ring keeps its size; its unpaired bases spread out between the helices.<br>
+        Click <b>Unlock</b> or press <b>Esc</b> when done.</div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="ringLockBtn">Lock ring</button>
+      </div>
+      <div class="hint" id="ringInfo"></div>
     </div>
     <div class="grp">
       <h2>Rotate selection</h2>
@@ -219,7 +233,7 @@
   <section class="pane" data-pane="letters">
     <div class="grp">
       <h2>Type</h2>
-      <div class="flexlabel"><label>Font size</label><span class="val" id="fontVal">18 px</span></div>
+      <div class="flexlabel"><label>Font size (all bases)</label><span class="val" id="fontVal">18 px</span></div>
       <input type="range" id="font" min="8" max="60" value="18">
       <label class="chk"><input type="checkbox" id="cLetter" checked> Show base letters</label>
       <label class="chk"><input type="checkbox" id="cBold"> Bold letters</label>
@@ -248,6 +262,36 @@
         <input type="color" id="selColor" value="#ffd166">
         <button class="mini" id="applySel">Apply</button>
       </div>
+    </div>
+    <div class="grp">
+      <h2>Size of selected bases</h2>
+      <div class="hint" style="margin-top:0">Enlarge or shrink just the selected bases (letter and circle together),
+        relative to the font size above. The font-size slider still changes everything.</div>
+      <div class="flexlabel"><label>Size</label><span class="val" id="selSizeVal">150%</span></div>
+      <input type="range" id="selSize" min="50" max="300" step="10" value="150">
+      <div class="row" style="margin-top:6px">
+        <button class="mini" id="applySize">Apply to selected</button>
+        <button class="mini" id="resetSize">Reset all sizes</button>
+      </div>
+      <div class="hint" id="sizeInfo"></div>
+    </div>
+    <div class="grp">
+      <h2>Color from file</h2>
+      <div class="hint" style="margin-top:0">Upload a .txt with one line per position (or range):
+        <code>position&nbsp;[base]&nbsp;color&nbsp;[target]</code>, e.g. <code>12 G #e15554</code>
+        or <code>5-9 orange circle</code>. Download the sample to see the full format.</div>
+      <label>Apply to (when a line doesn't say)</label>
+      <select id="colorTarget">
+        <option value="letter">Letters</option>
+        <option value="circle">Circle fill</option>
+        <option value="both">Both</option>
+      </select>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="colorFileBtn">Upload color file…</button>
+        <button class="mini" id="colorSample">Download sample</button>
+        <input type="file" id="colorFile" accept=".txt,.tsv,.csv,text/plain" style="display:none">
+      </div>
+      <div class="hint" id="colorFileInfo"></div>
     </div>
   </section>
 
@@ -432,6 +476,7 @@ const M = {
   color:[],       // per-base letter color
   circleColor:{}, // per-base circle-fill override, keyed by index; falls back to fill mode
   bondColor:{},   // per-H-bond color, keyed by lower base index; falls back to global
+  size:{},        // per-base size multiplier (letter AND circle), keyed by index; absent = 1
   selected:new Set(),
   selBond:new Set(),
   // view
@@ -1153,14 +1198,14 @@ function strands(){
     const dA=docs[cx.docA]||newDoc(), dB=docs[cx.docB]||newDoc();
     return [
       {tag:'A', seq:CM.seqA, n:CM.nA, pt:CM.ptA, nonWC:CM.nonWCA, x:CM.xA, y:CM.yA, offX:CM.offXA, offY:CM.offYA,
-       sel:CM.selA, color:dA.color, circleColor:dA.circleColor, bondColor:dA.bondColor, selBond:null},
+       sel:CM.selA, color:dA.color, circleColor:dA.circleColor, bondColor:dA.bondColor, size:dA.size, selBond:null},
       {tag:'B', seq:CM.seqB, n:CM.nB, pt:CM.ptB, nonWC:CM.nonWCB, x:CM.xB, y:CM.yB, offX:CM.offXB, offY:CM.offYB,
-       sel:CM.selB, color:dB.color, circleColor:dB.circleColor, bondColor:dB.bondColor, selBond:null},
+       sel:CM.selB, color:dB.color, circleColor:dB.circleColor, bondColor:dB.bondColor, size:dB.size, selBond:null},
     ];
   }
   if(M.n===0) return [];
   return [{tag:'S', seq:M.seq, n:M.n, pt:M.pt, nonWC:M.nonWC, x:M.x, y:M.y, offX:M.offX, offY:M.offY,
-    sel:M.selected, color:M.color, circleColor:M.circleColor, bondColor:M.bondColor, selBond:M.selBond}];
+    sel:M.selected, color:M.color, circleColor:M.circleColor, bondColor:M.bondColor, size:M.size, selBond:M.selBond}];
 }
 // inter-strand (hetero-duplex) rungs as [[strandIdx,i],[strandIdx,j]] — empty outside complex mode
 function heteroPairs(){
@@ -1170,7 +1215,8 @@ function heteroPairs(){
   return out;
 }
 function hasContent(){ return strands().some(st=>st.n>0); }
-const effX=(st,i)=>st.x[i]+(st.offX[i]||0);    // effective model coord = auto layout + manual offset
+const effX=(st,i)=>st.x[i]+(st.offX[i]||0);
+const baseScale=(st,i)=>(st.size&&st.size[i])||1;   // per-base size multiplier (letter + circle)    // effective model coord = auto layout + manual offset
 const effY=(st,i)=>st.y[i]+(st.offY[i]||0);
 // display coords: every strand rotated by M.rot about the COMBINED centroid (text stays upright —
 // glyphs are drawn at the rotated point, never rotated themselves). Returns one array per strand.
@@ -1193,7 +1239,10 @@ function bbox(points, pad){
   minx-=pad; miny-=pad; maxx+=pad; maxy+=pad;
   return {minx,miny,maxx,maxy,W:maxx-minx,H:maxy-miny};
 }
-function contentBox(){ return bbox(displayPoints().flat(), M.font*2.2); }
+function contentBox(){
+  let mx=1; for(const st of strands()) for(const k in (st.size||{})) mx=Math.max(mx,st.size[k]);
+  return bbox(displayPoints().flat(), M.font*2.2*mx);
+}
 
 // the closed sub-structure "branch" rooted at base i, for drag-to-reposition.
 // Nested dot-bracket guarantees a paired base's whole subtree is the contiguous range [a,b].
@@ -1258,17 +1307,23 @@ function buildScene(interactive){
   const numEvery=parseInt($("numEvery").value)||0;
   const rungW=Math.max(1.4,font*0.11);
   const E=(t,a,text)=>{ els.push({t,a,text}); };
-  const seg=(p,q,pad)=>{ const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
-    return {x1:p.x+ux*pad,y1:p.y+uy*pad,x2:q.x-ux*pad,y2:q.y-uy*pad}; };
+  const seg=(p,q,pad,padQ)=>{ const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
+    if(padQ===undefined) padQ=pad;
+    return {x1:p.x+ux*pad,y1:p.y+uy*pad,x2:q.x-ux*padQ,y2:q.y-uy*padQ}; };
   const line=(s,stroke,w,extra)=>E('line',Object.assign({...s,stroke,'stroke-width':w,'stroke-linecap':'round'},extra||{}));
 
+  if(interactive && ringLock && !CM.active && sts[0] && sts[0].pt[ringLock.ci]>ringLock.ci){
+    const rm=ringModel(sts[0].pt,ringLock.ci), {cx,cy,R}=circleFit(rm.seqOrder.map(i=>P[0][i]));
+    E('circle',{cx,cy,r:R,fill:'rgba(255,140,26,0.06)',stroke:SEL_RING,'stroke-width':1.5/M.zoom+0.5,
+      'stroke-dasharray':`${6/M.zoom},${4/M.zoom}`});
+  }
   if(showPair){
     for(const [[sa,ia],[sb,ib]] of heteroPairs())
-      line(seg(P[sa][ia],P[sb][ib],gap), dupColor, Math.max(1.6,font*0.13));
+      line(seg(P[sa][ia],P[sb][ib],gap*baseScale(sts[sa],ia),gap*baseScale(sts[sb],ib)), dupColor, Math.max(1.6,font*0.13));
     sts.forEach((st,s)=>{
       for(let i=0;i<st.n;i++){
         const j=st.pt[i]; if(j<=i) continue;
-        const sg=seg(P[s][i],P[s][j],gap);
+        const sg=seg(P[s][i],P[s][j],gap*baseScale(st,i),gap*baseScale(st,j));
         if(interactive && st.selBond && st.selBond.has(i))
           line(sg, BOND_HI, rungW+6/M.zoom+2, {opacity:0.9});
         // non-WC pairs ([ ] / { } / < > in the input) are dashed so they read as different from a
@@ -1282,7 +1337,7 @@ function buildScene(interactive){
     });
   }
   if(showBack) sts.forEach((st,s)=>{
-    for(let i=0;i<st.n-1;i++) line(seg(P[s][i],P[s][i+1],gap*0.92), backColor, Math.max(1,font*0.08));
+    for(let i=0;i<st.n-1;i++) line(seg(P[s][i],P[s][i+1],gap*0.92*baseScale(st,i),gap*0.92*baseScale(st,i+1)), backColor, Math.max(1,font*0.08));
   });
   // bases in two passes so letters always sit ON TOP of every circle, even where filled circles overlap
   sts.forEach((st,s)=>{
@@ -1292,10 +1347,10 @@ function buildScene(interactive){
         const bc=baseColor(st.seq[i]);
         const fill=(st.circleColor&&st.circleColor[i]) || (fillMode==='none'?'none':(fillMode==='base'?bc:fillColor));
         const stroke=frameMode==='none'?'none':(frameMode==='base'?bc:frameColor);
-        const a={cx:p.x,cy:p.y,r:circR,fill,stroke}; if(stroke!=='none') a['stroke-width']=circW;
+        const a={cx:p.x,cy:p.y,r:circR*baseScale(st,i),fill,stroke}; if(stroke!=='none') a['stroke-width']=circW;
         E('circle',a);
       }
-      if(interactive) E('circle',{cx:p.x,cy:p.y,r:Math.max(circR,font*0.6),fill:'transparent',class:'base-hit','data-s':s,'data-i':i});
+      if(interactive) E('circle',{cx:p.x,cy:p.y,r:Math.max(circR,font*0.6)*baseScale(st,i),fill:'transparent',class:'base-hit','data-s':s,'data-i':i});
     }
   });
   const labels = numEvery>0 ? placeNumberLabels(sts,P,numEvery,font,circR) : new Map();
@@ -1303,7 +1358,7 @@ function buildScene(interactive){
     for(let i=0;i<st.n;i++){
       const p=P[s][i];
       if(interactive && st.sel.has(i))
-        E('circle',{cx:p.x,cy:p.y,r:font*0.82,fill:'none',stroke:SEL_RING,'stroke-width':2/M.zoom+0.8});
+        E('circle',{cx:p.x,cy:p.y,r:font*0.82*baseScale(st,i),fill:'none',stroke:SEL_RING,'stroke-width':2/M.zoom+0.8});
       const lab=labels.get(s+':'+i);
       if(lab){
         if(lab.leader) line(lab.leader, NUM_COLOR, Math.max(0.6,font*0.04));
@@ -1312,7 +1367,7 @@ function buildScene(interactive){
       }
       if(showLetter){
         const a={x:p.x,y:p.y,'text-anchor':'middle','dominant-baseline':'central',
-          'font-family':'ui-monospace,Menlo,monospace','font-size':font,'font-weight':bold?700:400,
+          'font-family':'ui-monospace,Menlo,monospace','font-size':font*baseScale(st,i),'font-weight':bold?700:400,
           fill:(st.color&&st.color[i])||FALLBACK_COLOR};
         if(interactive){ a.class='base-hit'; a['data-s']=s; a['data-i']=i; }
         E('text',a,st.seq[i]);
@@ -1336,7 +1391,7 @@ function placeNumberLabels(sts,P,numEvery,font,circR){
   const pts=[], segs=[];
   sts.forEach((st,s)=>{
     for(let i=0;i<st.n;i++){
-      pts.push(P[s][i]);
+      pts.push({x:P[s][i].x, y:P[s][i].y, r:circR*baseScale(st,i)});
       if(i<st.n-1) segs.push([P[s][i],P[s][i+1]]);
       if(st.pt[i]>i) segs.push([P[s][i],P[s][st.pt[i]]]);
     }
@@ -1359,11 +1414,11 @@ function placeNumberLabels(sts,P,numEvery,font,circR){
       const order=[0]; for(let k=1;k<=12;k++){ order.push(k); if(k<12) order.push(-k); }
       let best=null;
       for(const ring of [1,1.5,2.1]){
-        const d=circR+rl+font*0.12+(ring-1)*font*0.9;
+        const d=circR*baseScale(st,i)+rl+font*0.12+(ring-1)*font*0.9;
         for(const k of order){
           const a=a0+k*Math.PI/12, c={x:p.x+Math.cos(a)*d, y:p.y+Math.sin(a)*d};
           let clr=Infinity;
-          for(const q of pts) clr=Math.min(clr, Math.hypot(c.x-q.x,c.y-q.y)-circR);
+          for(const q of pts) clr=Math.min(clr, Math.hypot(c.x-q.x,c.y-q.y)-q.r);
           for(const sg of segs) clr=Math.min(clr, segDist(c,sg));
           for(const L of placed) clr=Math.min(clr, Math.hypot(c.x-L.x,c.y-L.y)-L.r);
           const score=clr-rl;
@@ -1375,12 +1430,226 @@ function placeNumberLabels(sts,P,numEvery,font,circR){
       const lab={x:best.x, y:best.y};
       if(best.ring>1){
         const ux=Math.cos(best.a), uy=Math.sin(best.a), dd=Math.hypot(best.x-p.x,best.y-p.y);
-        lab.leader={x1:p.x+ux*(circR+font*0.08), y1:p.y+uy*(circR+font*0.08), x2:p.x+ux*(dd-rl), y2:p.y+uy*(dd-rl)};
+        const r0=circR*baseScale(st,i)+font*0.08;
+        lab.leader={x1:p.x+ux*r0, y1:p.y+uy*r0, x2:p.x+ux*(dd-rl), y2:p.y+uy*(dd-rl)};
       }
       out.set(s+':'+i, lab); placed.push({x:best.x,y:best.y,r:rl});
     }
   });
   return out;
+}
+
+/* ---------- Varna-style ring rotation ----------
+   A locked ring is a loop (hairpin / internal / multiloop) identified by its closing opener `ci`
+   (so it's derived from pt[] and can't go stale). While locked, dragging any base OUTSIDE the
+   ring's own unpaired bases swings the "branch" it belongs to around the ring's center:
+     - a base inside a child helix (a..b)  -> that helix and everything it encloses
+     - anything else (the closing helix, or outside it) -> the whole rest of the molecule
+   The ring's radius never changes. The helices' attachment rungs slide along the circle, and the
+   ring's unpaired bases are re-spaced evenly in the arcs between consecutive helices (the rungs act
+   as dividers). A helix can't slide past its neighbours: each arc keeps room for its bases at
+   >= 0.75 spacing. Everything is applied through offX/offY, recomputed from the drag-start state on
+   every mouse move (no drift), and recorded as one undo step. Single-sequence view only. */
+let ringLock=null;       // {ci} while a ring is locked
+let ringDrag=null;       // per-drag state, see startRingDrag
+function enclosingOpener(pt,i){
+  let k=i-1;
+  while(k>=0){
+    if(pt[k]===-1){ k--; continue; }
+    if(pt[k]>i) return k;
+    k=Math.min(k,pt[k])-1;
+  }
+  return -1;
+}
+// circle members of the loop closed by (ci, pt[ci]), in sequence order, plus its anchors and gaps
+function ringModel(pt,ci){
+  const cj=pt[ci], seqOrder=[ci], children=[], gaps=[[]];
+  for(let k=ci+1;k<cj;){
+    if(pt[k]===-1){ gaps[gaps.length-1].push(k); seqOrder.push(k); k++; }
+    else { children.push({a:k,b:pt[k]}); seqOrder.push(k,pt[k]); gaps.push([]); k=pt[k]+1; }
+  }
+  seqOrder.push(cj);
+  return {ci,cj,seqOrder,children,gaps};
+}
+// Least-squares circle through points (Kåsa fit). NOT the centroid: once a ring's bases have been
+// re-spaced unevenly their centroid drifts off the true center, and a second drag would then use
+// the wrong circle (the ring would visibly change size).
+function circleFit(pts){
+  let n=pts.length, sx=0,sy=0; for(const p of pts){ sx+=p.x; sy+=p.y; } const mx=sx/n, my=sy/n;
+  let suu=0,svv=0,suv=0,suuu=0,svvv=0,suvv=0,svuu=0;
+  for(const p of pts){ const u=p.x-mx, v=p.y-my;
+    suu+=u*u; svv+=v*v; suv+=u*v; suuu+=u*u*u; svvv+=v*v*v; suvv+=u*v*v; svuu+=v*u*u; }
+  const det=suu*svv-suv*suv;
+  let uc=0, vc=0;
+  if(Math.abs(det)>1e-9){ const b1=(suuu+suvv)/2, b2=(svvv+svuu)/2; uc=(b1*svv-b2*suv)/det; vc=(suu*b2-suv*b1)/det; }
+  const cx=mx+uc, cy=my+vc; let R=0; for(const p of pts) R+=Math.hypot(p.x-cx,p.y-cy);
+  return {cx, cy, R:R/n};
+}
+function setRingInfo(msg){ $("ringInfo").textContent=msg||""; }
+function lockRingFromSelection(){
+  if(CM.active){ setRingInfo("Ring rotation works on a single sequence — open one from the Input tab."); return; }
+  let ci=-1;
+  for(const i of M.selected) if(M.pt[i]===-1){ const e=enclosingOpener(M.pt,i); if(e!==-1){ ci=e; break; } }
+  if(ci===-1){ setRingInfo("Select a ring first: Ctrl/⌘+click an unpaired base inside a loop."); return; }
+  ringLock={ci};
+  const rm=ringModel(M.pt,ci);
+  M.selected.clear(); rm.gaps.flat().forEach(i=>M.selected.add(i)); updateSelInfo();
+  $("ringLockBtn").textContent="Unlock ring"; $("ringLockBtn").classList.add("primary");
+  setRingInfo(`Ring locked (closed by bases ${ci+1}–${rm.cj+1}, ${rm.children.length} helix${rm.children.length===1?'':'es'} inside). Drag a helix to swing it around.`);
+  render();
+}
+function unlockRing(){
+  ringLock=null; ringDrag=null;
+  $("ringLockBtn").textContent="Lock ring"; $("ringLockBtn").classList.remove("primary");
+  setRingInfo(""); render();
+}
+function startRingDrag(st,k,e){
+  const rm=ringModel(st.pt,ringLock.ci);
+  if(rm.gaps.flat().includes(k)){ setRingInfo("The ring itself is locked — drag one of the helices attached to it."); return null; }
+  const P0=[]; for(let i=0;i<st.n;i++) P0.push({x:effX(st,i),y:effY(st,i)});
+  const {cx,cy,R}=circleFit(rm.seqOrder.map(i=>P0[i]));
+  const ang=i=>Math.atan2(P0[i].y-cy,P0[i].x-cx);
+  const th0=ang(rm.ci);
+  let dd=ang(rm.seqOrder[1])-th0; while(dd>Math.PI)dd-=2*Math.PI; while(dd<=-Math.PI)dd+=2*Math.PI;
+  const sign=dd>=0?1:-1;
+  const phi=i=>{ let v=sign*(ang(i)-th0); v%=2*Math.PI; if(v<0)v+=2*Math.PI; return v; };
+  // anchors in circular order: children..., then the outer (closing) helix
+  const anchors=rm.children.map(c=>({s:phi(c.a), e:phi(c.b), idx:c}));
+  anchors.push({s:phi(rm.cj), e:2*Math.PI, outer:true});
+  let r=anchors.findIndex(an=>!an.outer && k>=an.idx.a && k<=an.idx.b);
+  if(r===-1) r=anchors.length-1;                       // the rest of the molecule
+  const branch=[];
+  if(anchors[r].outer){ for(let i=0;i<st.n;i++) if(i<=rm.ci||i>=rm.cj) branch.push(i); }
+  else for(let i=anchors[r].idx.a;i<=anchors[r].idx.b;i++) branch.push(i);
+  // arc gap g (between anchor g-1's end and anchor g's start; anchor -1 = outer at 0) and its bases
+  const minStep=2*Math.asin(Math.min(1,0.75*SPACING/(2*R)));
+  const need=g=>(rm.gaps[g].length+1)*minStep;
+  const gapLen=g=>{ const prevE = g===0 ? 0 : anchors[g-1].e; return anchors[g].s-prevE; };
+  // rotating anchor r by d: the gap before it (index r) grows by d, the gap after it shrinks by d
+  const before=r, after=(r+1)%anchors.length;
+  // with a single helix (a plain hairpin loop) the one arc just travels with it: no limit
+  const dMin = anchors.length===1 ? -Infinity : need(before)-gapLen(before);
+  const dMax = anchors.length===1 ?  Infinity : gapLen(after)-need(after);
+  const D=displayPoints(strands())[0];
+  return {st,rm,P0,cx,cy,R,th0,sign,anchors,r,branch,dMin:Math.min(0,dMin),dMax:Math.max(0,dMax),
+    raw:0, lastA:mouseAngle(e,rm,D), moved:false};
+}
+function mouseAngle(e,rm,D){       // mouse angle about the ring's DISPLAYED center (rotation-safe)
+  const {cx,cy}=circleFit(rm.seqOrder.map(i=>D[i]));
+  const p=svgLocal(e), mx=(p.x-M.panX)/M.zoom, my=(p.y-M.panY)/M.zoom;
+  return Math.atan2(my-cy,mx-cx);
+}
+function applyRingDrag(rd){
+  const {st,rm,P0,cx,cy,R,th0,sign,anchors,r,branch}=rd;
+  const d=Math.max(rd.dMin,Math.min(rd.dMax, rd.sign*rd.raw));     // traversal-angle shift, clamped
+  const rot=sign*d, c=Math.cos(rot), s=Math.sin(rot);
+  const setEff=(i,X,Y)=>{ st.offX[i]=X-st.x[i]; st.offY[i]=Y-st.y[i]; };
+  for(let i=0;i<st.n;i++) setEff(i,P0[i].x,P0[i].y);                    // restore start state
+  for(const i of branch){ const dx=P0[i].x-cx, dy=P0[i].y-cy; setEff(i, cx+dx*c-dy*s, cy+dx*s+dy*c); }
+  // anchor angles after the move, then re-space each arc's unpaired bases between them
+  const A=anchors.map((an,k)=>k===r?{s:an.s+d,e:an.e+d}:{s:an.s,e:an.e});
+  const outerShift = anchors[r].outer ? d : 0;                          // ci moved with the outer helix
+  rm.gaps.forEach((run,g)=>{
+    const from = g===0 ? outerShift : A[g-1].e, to = A[g].s;
+    run.forEach((i,q)=>{ const f=from+(to-from)*(q+1)/(run.length+1), th=th0+sign*f;
+      setEff(i, cx+R*Math.cos(th), cy+R*Math.sin(th)); });
+  });
+}
+
+/* ---------- per-base size ---------- */
+function applySelectedSize(){
+  const v=(+$("selSize").value||100)/100; let n=0;
+  for(const st of strands()) st.sel.forEach(i=>{ if(v===1) delete st.size[i]; else st.size[i]=v; n++; });
+  $("sizeInfo").textContent = n ? `Set ${n} base${n===1?'':'s'} to ${Math.round(v*100)}%.` : "Select some bases first.";
+  render(); return n>0;
+}
+
+/* ---------- color from file ----------
+   Format (whitespace, tab or comma separated; lines starting with # are comments):
+     position  [base]  color  [target]
+   position: 1-based number or range "5-9"; in a complex, optionally prefixed "A:" / "B:" (default A)
+   base:     optional single letter, only checked against the sequence (mismatches are reported)
+   color:    #rgb / #rrggbb hex or any CSS color name
+   target:   optional letter | circle | both (else the "Apply to" menu decides) */
+function cssColorOK(c){
+  if(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c)) return true;
+  const s=new Option().style; s.color=''; s.color=c; return s.color!=='';
+}
+function parseColorFile(text){
+  const entries=[], bad=[];
+  text.split(/\r?\n/).forEach((raw,ln)=>{
+    const line=raw.trim(); if(!line || line[0]==='#') return;
+    const tok=line.split(/[\s,;]+/).filter(Boolean);
+    const m=/^(?:([AaBb]):)?(\d+)(?:-(\d+))?$/.exec(tok[0]||'');
+    if(!m){ if(entries.length||bad.length) bad.push(`line ${ln+1}: "${tok[0]}" isn't a position`); return; }  // 1st = header
+    let k=1, base=null, target=null;
+    if(tok[k] && /^[AUTGCN]$/i.test(tok[k]) && tok.length>2){ base=tok[k].toUpperCase(); k++; }
+    const color=tok[k]; k++;
+    if(!color || !cssColorOK(color)){ bad.push(`line ${ln+1}: unknown color "${color||''}"`); return; }
+    if(tok[k]){ const tg=tok[k].toLowerCase().replace(/s$/,'');
+      if(tg==='letter'||tg==='circle'||tg==='both') target=tg; else if(tg==='fill') target='circle';
+      else { bad.push(`line ${ln+1}: unknown target "${tok[k]}"`); return; } }
+    const from=+m[2], to=m[3]?+m[3]:from;
+    entries.push({strand:(m[1]||'A').toUpperCase(), from:Math.min(from,to), to:Math.max(from,to), base, color, target, ln:ln+1});
+  });
+  return {entries,bad};
+}
+function applyColorFile(text){
+  const {entries,bad}=parseColorFile(text), sts=strands();
+  if(!sts.length){ $("colorFileInfo").textContent="Render a sequence first."; return false; }
+  const def=$("colorTarget").value; let applied=0, circles=false; const mism=[], range=[];
+  for(const en of entries){
+    const st = CM.active ? sts[en.strand==='B'?1:0] : (en.strand==='B'?null:sts[0]);
+    if(!st){ range.push(`line ${en.ln}: B: only applies inside a complex`); continue; }
+    for(let pos=en.from; pos<=en.to; pos++){
+      const i=pos-1;
+      if(i<0||i>=st.n){ range.push(`line ${en.ln}: position ${pos} is past the end (${st.n} nt)`); break; }
+      if(en.base && en.from===en.to && st.seq[i]!==en.base) mism.push(`${pos} (file ${en.base}, sequence ${st.seq[i]})`);
+      const tg=en.target||def;
+      if(tg==='letter'||tg==='both') st.color[i]=en.color;
+      if(tg==='circle'||tg==='both'){ st.circleColor[i]=en.color; circles=true; }
+      applied++;
+    }
+  }
+  if(circles && !$("cCircle").checked) $("cCircle").checked=true;   // make circle colors visible
+  const notes=[`Colored ${applied} base${applied===1?'':'s'}.`];
+  if(circles && !applied) notes.length=0;
+  const skipped=bad.concat(range);
+  if(skipped.length) notes.push(`Skipped ${skipped.length}: ${skipped.slice(0,3).join('; ')}${skipped.length>3?'…':''}.`);
+  if(mism.length) notes.push(`Base letter didn't match at ${mism.slice(0,3).join(', ')}${mism.length>3?'…':''} — is this file for this sequence?`);
+  $("colorFileInfo").textContent=notes.join(' ');
+  render(); return applied>0;
+}
+// A ready-to-edit sample for whatever is open: every position, colored by structural part.
+const PART_COLORS={stem:"#3b6fb6", loop:"#e8833a", free:"#8a93a3"};
+function colorSampleText(){
+  const L=["# AptaRender color file",
+    "# One line per base (or range of bases):   position  [base]  color  [target]",
+    "#   position : 1-based position, or a range like 5-9",
+    "#              (inside a two-strand complex, prefix A: or B: — e.g. B:12; no prefix = strand A)",
+    "#   base     : optional letter; only used to double-check this file matches the sequence",
+    "#   color    : hex like #e15554 or #e15, or a color name like red, orange, steelblue",
+    "#   target   : optional — letter, circle or both; without it the 'Apply to' menu decides",
+    "# Lines starting with # are ignored. Positions you leave out keep their current color.",
+    "# Separate columns with spaces, tabs or commas.",
+    "#",
+    "# This sample colors the open structure by part:",
+    `#   ${PART_COLORS.stem}  blue   = paired bases (stems)`,
+    `#   ${PART_COLORS.loop}  orange = unpaired bases inside a loop (hairpin, internal loop, multiloop)`,
+    `#   ${PART_COLORS.free}  gray   = free 5'/3' ends and linkers between stems`,
+    "# Range example (commented out):  # 3-7 #ffd166 both",
+    "#",
+    "# position  base  color"];
+  const sts=strands();
+  if(!sts.length){ L.push("1  G  #3b6fb6","2  G  #3b6fb6","3  A  #e8833a","4  A  #e8833a","5  C  #3b6fb6","6  C  #3b6fb6"); return L.join("\n")+"\n"; }
+  sts.forEach((st,s)=>{
+    const pre = CM.active ? (s===0?'A:':'B:') : '';
+    for(let i=0;i<st.n;i++){
+      const part = st.pt[i]!==-1 ? 'stem' : (enclosingOpener(st.pt,i)!==-1 ? 'loop' : 'free');
+      L.push(`${(pre+(i+1)).padEnd(6)}${st.seq[i]}  ${PART_COLORS[part]}`);
+    }
+  });
+  return L.join("\n")+"\n";
 }
 
 /* ---------- render ---------- */
@@ -1442,6 +1711,7 @@ function saveInput(){                     // sync active doc's raw text + persis
   persist();
 }
 function build(){
+  if(ringLock) unlockRing();
   $("err").textContent="";
   saveInput();
   let parsed;
@@ -1452,7 +1722,7 @@ function build(){
   M.x=lay.x; M.y=lay.y;
   M.offX=new Array(M.n).fill(0); M.offY=new Array(M.n).fill(0);
   M.color=new Array(M.n);
-  M.selected.clear(); M.selBond.clear(); M.bondColor={}; M.circleColor={};
+  M.selected.clear(); M.selBond.clear(); M.bondColor={}; M.circleColor={}; M.size={};
   applyPalette();      // default coloring
   updateSelInfo(); updateBondInfo();
   fit();
@@ -1561,6 +1831,11 @@ function togglePart(s,idx){
 svg.addEventListener("contextmenu",e=>{ if(e.target.closest(".base-hit")) e.preventDefault(); }); // macOS Ctrl+click
 svg.addEventListener("mousedown",e=>{
   const baseEl=e.target.closest(".base-hit");
+  if(baseEl && ringLock && !CM.active){
+    const st=strands()[0];
+    ringDrag=startRingDrag(st,+baseEl.dataset.i,e);
+    e.preventDefault(); return;
+  }
   if(baseEl){
     const s=+baseEl.dataset.s, i=+baseEl.dataset.i, sts=strands(), st=sts[s];
     let sets, part=null;
@@ -1577,6 +1852,12 @@ svg.addEventListener("mousedown",e=>{
   svg.classList.add("panning");
 });
 window.addEventListener("mousemove",e=>{
+  if(ringDrag){
+    const D=displayPoints(strands())[0], a=mouseAngle(e,ringDrag.rm,D);
+    let da=a-ringDrag.lastA; while(da>Math.PI)da-=2*Math.PI; while(da<=-Math.PI)da+=2*Math.PI;
+    ringDrag.raw+=da; ringDrag.lastA=a; ringDrag.moved=true;
+    applyRingDrag(ringDrag); render(); return;
+  }
   if(baseDrag){
     const sdx=e.clientX-baseDrag.lastX, sdy=e.clientY-baseDrag.lastY;
     if(Math.abs(sdx)>1||Math.abs(sdy)>1) baseDrag.moved=true;
@@ -1600,6 +1881,7 @@ window.addEventListener("mousemove",e=>{
   lastX=e.clientX; lastY=e.clientY; render();
 });
 window.addEventListener("mouseup",e=>{
+  if(ringDrag){ if(ringDrag.moved){ suppressClick=true; touch(); } ringDrag=null; return; }
   if(baseDrag){
     if(baseDrag.moved){ suppressClick=true; touch(); }   // persist the new offsets
     else if(baseDrag.part){ suppressClick=true; togglePart(baseDrag.part.s, baseDrag.part.idx); }
@@ -1695,11 +1977,11 @@ function applyStyle(s){
   readPalette();
   $("stage").style.background=$("bgColor").value;
 }
-function newDoc(name,seq,dot){ return {name:name||'seq', seq:seq||'', dot:dot||'', color:[], circleColor:{}, bondColor:{}, offset:null, view:null, style:null}; }
+function newDoc(name,seq,dot){ return {name:name||'seq', seq:seq||'', dot:dot||'', color:[], circleColor:{}, bondColor:{}, size:{}, offset:null, view:null, style:null}; }
 function uniform(){ return $("uniformStyle").checked; }
 function setRotUI(){ $("rot").value=M.rot; $("rotVal").textContent=M.rot+"°"; }
 function blankCanvas(){
-  M.n=0; M.selected.clear(); M.selBond.clear(); M.circleColor={}; M.bondColor={};
+  M.n=0; M.selected.clear(); M.selBond.clear(); M.circleColor={}; M.bondColor={}; M.size={};
   updateSelInfo(); updateBondInfo(); render();
 }
 // Writes the live view back into its backing store. In complex view, M still holds whatever
@@ -1713,7 +1995,7 @@ function saveActive(){
   const d=docs[active];
   d.seq=$("seq").value; d.dot=$("dot").value;
   d.color=(M.color&&M.color.length)?M.color.slice():[];
-  d.circleColor={...M.circleColor}; d.bondColor={...M.bondColor};
+  d.circleColor={...M.circleColor}; d.bondColor={...M.bondColor}; d.size={...M.size};
   d.offset={x:(M.offX||[]).slice(), y:(M.offY||[]).slice()};
   d.view={zoom:M.zoom,panX:M.panX,panY:M.panY,rot:M.rot};
   d.style=readStyle();
@@ -1729,13 +2011,14 @@ function leaveComplex(){ if(!CM.active) return; saveActiveComplex(); CM.active=f
 // Gives a doc a color[] of the right length (identity palette) if it doesn't already have one.
 function ensureDocColors(d, seq){
   if(!d.color || d.color.length!==seq.length){ d.color=new Array(seq.length); for(let k=0;k<seq.length;k++) d.color[k]=M.palette[seq[k]]||FALLBACK_COLOR; }
-  if(!d.circleColor) d.circleColor={}; if(!d.bondColor) d.bondColor={};
+  if(!d.circleColor) d.circleColor={}; if(!d.bondColor) d.bondColor={}; if(!d.size) d.size={};
 }
 function restoreOffsets(saved, n){
   const ok=saved && saved.x && saved.x.length===n;
   return ok ? [saved.x.slice(), saved.y.slice()] : [new Array(n).fill(0), new Array(n).fill(0)];
 }
 function applyDoc(i){                     // load doc i into UI + model (does NOT save previous)
+  if(ringLock) unlockRing();              // a lock refers to the previous structure's indices
   CM.active=false;                        // opening a plain sequence always leaves complex view
   active=i; const d=docs[i]; $("err").textContent="";
   $("seq").value=d.seq||""; $("dot").value=d.dot||"";
@@ -1751,7 +2034,7 @@ function applyDoc(i){                     // load doc i into UI + model (does NO
     M.selected.clear(); M.selBond.clear();
     readPalette(); ensureDocColors(d, M.seq);
     M.color=d.color.slice();
-    M.circleColor={...d.circleColor}; M.bondColor={...d.bondColor};
+    M.circleColor={...d.circleColor}; M.bondColor={...d.bondColor}; M.size={...d.size};
     updateSelInfo(); updateBondInfo();
     if(d.view){ M.zoom=d.view.zoom; M.panX=d.view.panX; M.panY=d.view.panY; M.rot=d.view.rot; setRotUI(); render(); }
     else { M.rot=+($("rot").value||0); fit(); }
@@ -1796,6 +2079,7 @@ function newComplex(name,docA,docB,aStart,aEnd,bStart,bEnd,mode){
 function openComplex(i){
   const c=complexes[i]; if(!c) return null;
   $("cxErr").textContent="";
+  if(ringLock) unlockRing();
   const r=layoutComplex(c);
   if(r.error){ $("cxErr").textContent=r.error; return null; }
   saveActive();                           // flush the single view (or the complex we're leaving)
@@ -1916,7 +2200,7 @@ function serializeState(){
   saveActive();
   return {
     docs: docs.map(d=>({name:d.name, seq:d.seq, dot:d.dot, color:(d.color||[]).slice(),
-      circleColor:{...d.circleColor}, bondColor:{...d.bondColor},
+      circleColor:{...d.circleColor}, bondColor:{...d.bondColor}, size:{...(d.size||{})},
       offset:d.offset?{x:d.offset.x.slice(),y:d.offset.y.slice()}:null,
       view:d.view?{...d.view}:null, style:d.style?JSON.parse(JSON.stringify(d.style)):null})),
     active,
@@ -1997,7 +2281,7 @@ $("seq").oninput=saveInput; $("dot").oninput=saveInput;
 $("clear").onclick=()=>{                  // blank the active sequence (keeps it in the list)
   leaveComplex();
   $("seq").value=""; $("dot").value=""; $("err").textContent="";
-  if(active>=0){ const d=docs[active]; d.seq=""; d.dot=""; d.color=[]; d.circleColor={}; d.bondColor={}; d.view=null; d.offset=null; }
+  if(active>=0){ const d=docs[active]; d.seq=""; d.dot=""; d.color=[]; d.circleColor={}; d.bondColor={}; d.size={}; d.view=null; d.offset=null; }
   blankCanvas(); renderDocList(); pushHistory(); $("seq").focus();
 };
 // Continuous controls (sliders, color pickers): re-render live on `input`, record ONE undo step on
@@ -2030,6 +2314,7 @@ window.addEventListener("keydown",e=>{
   const el=document.activeElement;
   if(el && (el.tagName==="TEXTAREA" || (el.tagName==="INPUT" && /^(text|number|search)$/.test(el.type)))) return;
   const k=e.key.toLowerCase();
+  if(k==='escape' && ringLock){ unlockRing(); return; }
   if((e.ctrlKey||e.metaKey) && !e.shiftKey && k==='z'){ e.preventDefault(); undo(); }
   else if((e.ctrlKey||e.metaKey) && (k==='y' || (e.shiftKey && k==='z'))){ e.preventDefault(); redo(); }
 });
@@ -2052,6 +2337,16 @@ $("resetCircle").onclick=()=>{
 $("selAll").onclick=()=>{ for(const st of strands()) for(let i=0;i<st.n;i++) st.sel.add(i); updateSelInfo(); render(); };
 $("selNone").onclick=()=>{ clearSelection(); updateSelInfo(); render(); };
 $("zoomSel").onclick=zoomToSelection;
+$("ringLockBtn").onclick=()=>{ ringLock ? unlockRing() : lockRingFromSelection(); };
+$("selSize").oninput=e=>{ $("selSizeVal").textContent=e.target.value+"%"; };
+$("applySize").onclick=()=>{ if(applySelectedSize()) touch(); };
+$("resetSize").onclick=()=>{ for(const st of strands()) for(const k in st.size) delete st.size[k];
+  $("sizeInfo").textContent="All bases back to normal size."; render(); touch(); };
+$("colorFileBtn").onclick=()=>$("colorFile").click();
+$("colorFile").onchange=async e=>{ const f=e.target.files[0]; if(!f) return;
+  try{ if(applyColorFile(await f.text())) touch(); }catch(err){ $("colorFileInfo").textContent="Couldn't read that file."; }
+  e.target.value=""; };
+$("colorSample").onclick=()=>download("aptarender_colors_sample.txt", new Blob([colorSampleText()],{type:"text/plain"}));
 $("rotSelGo").onclick=()=>{
   const deg=parseFloat($("rotSelDeg").value);
   if(!Number.isFinite(deg)){ $("rotSelInfo").textContent="Enter an angle in degrees."; return; }

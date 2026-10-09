@@ -1,0 +1,39 @@
+# AptaRender color file
+# One line per base (or range of bases):   position  [base]  color  [target]
+#   position : 1-based position, or a range like 5-9
+#              (inside a two-strand complex, prefix A: or B: — e.g. B:12; no prefix = strand A)
+#   base     : optional letter; only used to double-check this file matches the sequence
+#   color    : hex like #e15554 or #e15, or a color name like red, orange, steelblue
+#   target   : optional — letter, circle or both; without it the 'Apply to' menu decides
+# Lines starting with # are ignored. Positions you leave out keep their current color.
+# Separate columns with spaces, tabs or commas.
+#
+# This sample colors the open structure by part:
+#   #3b6fb6  blue   = paired bases (stems)
+#   #e8833a  orange = unpaired bases inside a loop (hairpin, internal loop, multiloop)
+#   #8a93a3  gray   = free 5'/3' ends and linkers between stems
+# Range example (commented out):  # 3-7 #ffd166 both
+#
+# position  base  color
+1     G  #3b6fb6
+2     G  #3b6fb6
+3     G  #3b6fb6
+4     C  #3b6fb6
+5     A  #3b6fb6
+6     G  #3b6fb6
+7     C  #3b6fb6
+8     U  #e8833a
+9     U  #e8833a
+10    C  #e8833a
+11    G  #3b6fb6
+12    G  #3b6fb6
+13    C  #3b6fb6
+14    U  #3b6fb6
+15    G  #3b6fb6
+16    C  #3b6fb6
+17    C  #3b6fb6
+18    C  #8a93a3
+19    A  #8a93a3
+20    A  #8a93a3
+21    A  #8a93a3
+22    A  #8a93a3

@@ -3,6 +3,19 @@
 All notable changes to AptaRender. Newest first.
 
 ## 2026-10-07
+- **Varna-style ring rotation** (Layout tab → **Lock ring**). Ctrl/⌘+click an unpaired base of a
+  loop, click **Lock ring**, then drag any helix attached to that ring to swing it around the
+  ring (or drag the closing stem to swing the rest of the molecule). The ring keeps its size;
+  its unpaired bases re-spread evenly between the helices. Helices can't slide past each other,
+  so nothing overlaps. **Esc** or **Unlock ring** to finish. Single-sequence view.
+- **Color from file** (Letters tab): upload a .txt of `position [base] color [target]` lines
+  (ranges like `5-9`, hex or named colors, `A:`/`B:` strand prefixes in a complex) to color
+  letters, circle fills or both. **Download sample** writes a ready-to-edit file for the open
+  structure, colored by part (stems / loops / free ends). Skipped lines and base-letter
+  mismatches are reported.
+- **Size of selected bases** (Letters tab): enlarge or shrink just the selected bases (50–300%,
+  letter and circle together), with **Reset all sizes**. Saved, undoable, and exported. The
+  font-size slider (now labeled "all bases") still scales everything.
 - **Position numbers no longer overlap bases.** Each number is now placed beside its base in
   open space — on the outer side of a stem strand, outside a loop, past the end of a tail —
   checked against every base circle, line and other number. If a spot right next to the base
