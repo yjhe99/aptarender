@@ -2,6 +2,32 @@
 
 All notable changes to AptaRender. Newest first.
 
+## 2026-10-07
+- **Position numbers no longer overlap bases.** Each number is now placed beside its base in
+  open space — on the outer side of a stem strand, outside a loop, past the end of a tail —
+  checked against every base circle, line and other number. If a spot right next to the base
+  isn't free, the number moves a little further out with a thin leader line back to its base.
+  Follows rotation and dragging, and exports the same way.
+- **Removed the "Start numbering at" offset field** (Lines tab). Numbers always start at 1.
+
+## 2026-10-06
+- **Fixed — Free tails options not working on multi-stem structures:** with two or more
+  separate stems, the layout doubled back on itself so the 5′ and 3′ tails were drawn
+  exactly on top of each other (and on top of a stem rail). Every tail style started from
+  those overlapping positions, so none of them looked right. Structures with 2+ stems now
+  use an open baseline: the backbone runs left to right and each stem stands up from it,
+  spaced so loops and tails never overlap. Single-hairpin layouts are unchanged.
+- **Natural tails now curve inward, shaped like a loop.** On a single hairpin, the 5′ and
+  3′ tails are drawn around an open circle at the base of the stem, built the same way as the
+  hairpin loop, so they curve toward each other and mirror the loop at the tip. At least two
+  empty positions are always left between the two free ends, so they never meet or overlap,
+  and the circle grows with tail length. On structures with 2+ stems, each tail curls inward
+  toward the stems with a loop's curvature, opening up only as much as needed to clear the
+  stems and the other tail. Option relabeled "Natural (curves inward)". L-shape and
+  Perpendicular still turn outward, as labeled.
+- Changing the tail style now clears any manual drags on the free-tail bases, so the new
+  style shows cleanly (drags on stems and loops are kept).
+
 ## 2026-10-02
 - **Box select & parts:** Shift+drag on the background draws a selection box.
   Ctrl/⌘+click a base to select its *part* — the helix it belongs to, the loop ring it sits

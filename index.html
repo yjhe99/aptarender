@@ -207,7 +207,7 @@
       <h2>Free tails</h2>
       <label>Free 5′/3′ tails (unpaired ends)</label>
       <select id="tailMode">
-        <option value="natural">Natural (gentle curve)</option>
+        <option value="natural">Natural (curves inward)</option>
         <option value="flatten">Flatten (straight)</option>
         <option value="L">L-shape (90° corner)</option>
         <option value="perp">Perpendicular (90° out)</option>
@@ -321,10 +321,6 @@
       <div class="idrow">
         <span style="width:auto;font-weight:400;color:var(--muted);font-size:11px">Number every</span>
         <input type="number" id="numEvery" min="0" value="0"> <span style="width:auto;color:var(--muted);font-size:11px">nt (0=off)</span>
-      </div>
-      <div class="idrow" style="margin-top:6px">
-        <span style="width:auto;font-weight:400;color:var(--muted);font-size:11px">Start numbering at</span>
-        <input type="number" id="numOffset" value="1"> <span style="width:auto;color:var(--muted);font-size:11px">(shifts displayed numbers only — sequence is untouched)</span>
       </div>
     </div>
   </section>
@@ -577,6 +573,9 @@ function computeLayout(n, pt, S, tailMode){
   // way we came, not jump to the loop's farthest visual reach (that was the earlier bug:
   // it produced a long, wrong backbone line straight across the whole structure). Track
   // the current direction of travel and flip it every time we pass through a branch.
+  const nStems=items.filter(it=>it.t==='p').length;
+  if(nStems>=2) layoutBaseline(items);
+  else {
   let curX=0, curY=0, dirX=1, dirY=0;
   for(const it of items){
     if(it.t==='b'){
@@ -593,6 +592,56 @@ function computeLayout(n, pt, S, tailMode){
       buildStem(it.a, it.b, midX-dirX, midY-dirY);
       dirX=-dirX; dirY=-dirY;                        // the U-turn: we're now heading back
       curX=x[it.b]+dirX*S; curY=y[it.b]+dirY*S;      // resume right where 'b' ended up
+    }
+  }
+  }
+
+  // TWO OR MORE top-level stems: the "continue forward, U-turn, come back" scheme above only
+  // works for ONE stem — with a second stem the return trip runs straight back over the
+  // 5' tail (bases landed exactly on top of each other), and every tail style then started
+  // from those overlapping points, which is why the Free-tails options looked broken on any
+  // multi-stem aptamer. Instead, use the standard open exterior loop: the backbone runs
+  // left->right along a baseline (y=0) and every top-level stem stands up from it (-y).
+  // Each branch is first laid out on its own to measure how far its loops overhang its two
+  // rails, and the next branch is pushed right only as far as it must go for every one of its
+  // bases to stay >= 1 spacing from everything already placed (point-to-point, so a wide loop
+  // high up on one stem doesn't force a gap at the baseline when the neighbour's loop sits at a
+  // different height); any linker bases between two branches are spread evenly across the
+  // gap. 5'/3' tails continue straight
+  // along the baseline (the tail-style post-process below reshapes them).
+  function layoutBaseline(items){
+    for(const it of items) if(it.t==='p'){
+      x[it.a]=0; y[it.a]=0; x[it.b]=S; y[it.b]=0;
+      buildStem(it.a, it.b, S/2, 1);             // center below the rung -> stem grows up (-y)
+    }
+    const shift=(it,dx)=>{ for(let i=it.a;i<=it.b;i++) x[i]+=dx; };
+    const placed=[];                             // indices whose final position is fixed
+    const clearance=(it,dx)=>{                   // min distance from branch (shifted by dx) to placed
+      let m=Infinity;
+      for(let i=it.a;i<=it.b;i++) for(const q of placed) m=Math.min(m,Math.hypot(x[i]+dx-x[q],y[i]-y[q]));
+      return m;
+    };
+    let k=0;
+    while(k<items.length && items[k].t==='b') k++;             // leading 5' tail
+    const first=items[k];
+    for(let j=0;j<k;j++){ x[items[j].i]=-(k-j)*S; y[items[j].i]=0; placed.push(items[j].i); }
+    for(let i=first.a;i<=first.b;i++) placed.push(i);
+    let prev=first;
+    for(let j=k+1;j<items.length;){
+      const run=[]; while(j<items.length && items[j].t==='b'){ run.push(items[j].i); j++; }
+      if(j>=items.length){                                      // trailing 3' tail
+        run.forEach((i,q)=>{ x[i]=x[prev.b]+(q+1)*S; y[i]=0; });
+        break;
+      }
+      const it=items[j]; j++;
+      const xb=x[prev.b];
+      let xa=xb+(run.length+1)*S;                               // tightest legal spot...
+      while(clearance(it,xa)<S*0.98) xa+=S*0.1;                 // ...nudged right until it clears
+      shift(it, xa);
+      const step=(xa-xb)/(run.length+1);
+      run.forEach((i,q)=>{ x[i]=xb+(q+1)*step; y[i]=0; placed.push(i); });
+      for(let i=it.a;i<=it.b;i++) placed.push(i);
+      prev=it;
     }
   }
 
@@ -648,9 +697,17 @@ function computeLayout(n, pt, S, tailMode){
       const p1x=-fy,p1y=fx, ox=ax-cx,oy=ay-cy;
       return (p1x*ox+p1y*oy>=0)?[p1x,p1y]:[-p1x,-p1y];
     };
-    // anchor: last placed paired base; dirBase: its inner neighbour; step: +1 trailing / -1 leading
-    const placeTail=(anchor,dirBase,count,step)=>{
-      let fx=x[anchor]-x[dirBase], fy=y[anchor]-y[dirBase];
+    // a0/b0: first/last paired base (everything outside them is free tail). (rcx,rcy): centroid
+    // of the non-tail bases — "inward" for a tail means toward it.
+    const a0=pt.findIndex(v=>v!==-1), b0=n-1-[...pt].reverse().findIndex(v=>v!==-1);
+    let rcx=0,rcy=0; for(let i=a0;i<=b0;i++){ rcx+=x[i]; rcy+=y[i]; } rcx/=(b0-a0+1); rcy/=(b0-a0+1);
+    // anchor: last placed paired base; step: +1 trailing / -1 leading. The tail's straight
+    // heading is taken from the default layout itself (anchor -> its first tail base), which
+    // is right for both exterior layouts above. (It used to be taken from the anchor's
+    // neighbour INSIDE the stem — i.e. the helix axis — which for a baseline layout points
+    // straight down out of the stem instead of along the backbone.)
+    const placeTail=(anchor,count,step)=>{
+      let fx=x[anchor+step]-x[anchor], fy=y[anchor+step]-y[anchor];
       const L=Math.hypot(fx,fy)||1; fx/=L; fy/=L;
       // 90° turn direction: toward the anchor base's own strand side (away from its base-pair
       // partner), from the rung vector projected perpendicular to the helix axis. Stable and
@@ -663,28 +720,12 @@ function computeLayout(n, pt, S, tailMode){
         if(rl>1e-6){ px=rx/rl; py=ry/rl; }
       }
       if(px===undefined) [px,py]=perpOut(fx,fy,x[anchor],y[anchor]);   // fallback
-      // 'natural' arc parameters: an evenly-spaced (chord length S) circular arc that starts
-      // tangent to the incoming direction (fx,fy) and curves toward the SAME side (px,py)
-      // that 'perp'/'L' turn toward — just gradually instead of a hard corner. The radius is
-      // deliberately large (3 spacing units) so it reads as a gentle bend and can't wrap the
-      // tail back around on itself or toward the rest of the structure.
-      let acx,acy,avx,avy,astep,asign;
-      if(tailMode==='natural'){
-        const {Rc}=naturalArcRadius(count);
-        acx=x[anchor]+px*Rc; acy=y[anchor]+py*Rc;
-        avx=x[anchor]-acx;   avy=y[anchor]-acy;
-        astep=2*Math.asin(Math.min(0.999, S/(2*Rc)));
-        const ca=Math.cos(astep), sa=Math.sin(astep);
-        const tX=acx+avx*ca-avy*sa, tY=acy+avx*sa+avy*ca;
-        asign=((tX-x[anchor])*fx+(tY-y[anchor])*fy)>=0 ? 1 : -1;
-      }
+      // ('natural' doesn't come through here — see naturalTails below.) 'perp'/'L' turn
+      // OUTWARD (px,py), as their labels say: a hard 90° turn inward would run straight into
+      // the partner strand.
       for(let t=1;t<=count;t++){
         const idx=anchor+step*t; let X,Y;
-        if(tailMode==='natural'){
-          const ang=asign*astep*t, ca=Math.cos(ang), sa=Math.sin(ang);
-          X=acx+avx*ca-avy*sa; Y=acy+avx*sa+avy*ca;
-        }
-        else if(tailMode==='flatten'){ X=x[anchor]+fx*S*t;         Y=y[anchor]+fy*S*t; }
+        if(tailMode==='flatten'){ X=x[anchor]+fx*S*t;         Y=y[anchor]+fy*S*t; }
         else if(tailMode==='perp'){ X=x[anchor]+px*S*t;       Y=y[anchor]+py*S*t; }
         else { // 'L': one step along the helix, then a 90° turn
           if(t===1){ X=x[anchor]+fx*S;                        Y=y[anchor]+fy*S; }
@@ -693,10 +734,69 @@ function computeLayout(n, pt, S, tailMode){
         x[idx]=X; y[idx]=Y;
       }
     };
-    let a=0; while(a<n && pt[a]===-1) a++;            // first paired base
-    if(a>0 && a<n-1) placeTail(a, a+1, a, -1);        // leading tail 0..a-1
-    let b=n-1; while(b>=0 && pt[b]===-1) b--;         // last paired base
-    if(b>=1 && b<n-1) placeTail(b, b-1, n-1-b, +1);   // trailing tail b+1..n-1
+    // ---- 'natural': free ends curve the way a loop does ----
+    // Single top-level stem: its terminal pair (a0,b0) closes a VIRTUAL loop on the outside of
+    // the stem, built exactly like drawLoop builds a hairpin loop (same chord spacing S, same
+    // radius formula), so the 5' and 3' tails curve TOWARD each other around one circle and the
+    // base of the stem mirrors the loop at its tip. The circle has g >= 2 empty slots between
+    // the two free tips, so they can never meet or overlap; g grows if anything still clashes.
+    // Two or more stems: each tail is an arc that starts along the backbone and curves inward
+    // (toward the stems) with the curvature of a loop its own size; the radius only grows as
+    // much as needed to stay >= 0.9*S from every stem base and from the other tail.
+    function naturalTails(){
+      const t5=[], t3=[], body=[];
+      for(let i=a0-1;i>=0;i--) t5.push(i);
+      for(let i=b0+1;i<n;i++) t3.push(i);
+      for(let i=a0;i<=b0;i++) body.push(i);
+      const clear=(idxs,others)=>{ let m=Infinity;
+        for(const i of idxs) for(const q of others) m=Math.min(m,Math.hypot(x[i]-x[q],y[i]-y[q]));
+        return m; };
+      if(pt[a0]===b0){
+        const mx=(x[a0]+x[b0])/2, my=(y[a0]+y[b0])/2;
+        let ix,iy;                                    // unit vector from the rung INTO the stem
+        if(a0+1<b0-1 && pt[a0+1]===b0-1){ ix=(x[a0+1]+x[b0-1])/2-mx; iy=(y[a0+1]+y[b0-1])/2-my; }
+        else { ix=rcx-mx; iy=rcy-my; }
+        const il=Math.hypot(ix,iy)||1; ix/=il; iy/=il;
+        for(let g=2; g<80; g++){
+          const m=t3.length+t5.length+2+g, D=2*Math.PI/m;
+          const r=S/(2*Math.sin(Math.PI/m)), h=r*Math.cos(Math.PI/m);
+          const ccx=mx-ix*h, ccy=my-iy*h;             // center sits outside the stem
+          const th0=Math.atan2(y[b0]-ccy,x[b0]-ccx), thE=Math.atan2(y[a0]-ccy,x[a0]-ccx);
+          let d=thE-th0; while(d>Math.PI)d-=2*Math.PI; while(d<=-Math.PI)d+=2*Math.PI;
+          const sg=d>0?-1:1;                          // go the long way round, like drawLoop
+          t3.forEach((i,k)=>{ const th=th0+sg*D*(k+1); x[i]=ccx+r*Math.cos(th); y[i]=ccy+r*Math.sin(th); });
+          t5.forEach((i,k)=>{ const th=thE-sg*D*(k+1); x[i]=ccx+r*Math.cos(th); y[i]=ccy+r*Math.sin(th); });
+          if(clear(t5.concat(t3),body)>=0.9*S) return;
+        }
+        return;
+      }
+      const placed=body.slice();
+      for(const [tail,anchor,step] of [[t5,a0,-1],[t3,b0,+1]]){
+        if(!tail.length) continue;
+        let fx=x[anchor+step]-x[anchor], fy=y[anchor+step]-y[anchor];   // default heading
+        const fl=Math.hypot(fx,fy)||1; fx/=fl; fy/=fl;
+        let qx=-fy, qy=fx;                            // inward: the side the stems are on
+        if((rcx-x[anchor])*qx+(rcy-y[anchor])*qy<0){ qx=-qx; qy=-qy; }
+        let R=S/(2*Math.sin(Math.PI/(tail.length+2)));            // loop-sized curvature
+        for(let it=0; it<80; it++){
+          const ccx=x[anchor]+qx*R, ccy=y[anchor]+qy*R;
+          const vx=x[anchor]-ccx, vy=y[anchor]-ccy;
+          const as=2*Math.asin(Math.min(0.999,S/(2*R)));
+          // rotate the way that makes the first step go along the heading
+          const sg=((Math.cos(as)*vx-Math.sin(as)*vy+ccx-x[anchor])*fx+(Math.sin(as)*vx+Math.cos(as)*vy+ccy-y[anchor])*fy)>=0?1:-1;
+          tail.forEach((i,k)=>{ const a=sg*as*(k+1), c=Math.cos(a), s=Math.sin(a);
+            x[i]=ccx+vx*c-vy*s; y[i]=ccy+vx*s+vy*c; });
+          if(clear(tail,placed)>=0.9*S) break;
+          R*=1.12;
+        }
+        placed.push(...tail);
+      }
+    }
+    if(tailMode==='natural') naturalTails();
+    else {
+      if(a0>0) placeTail(a0, a0, -1);                 // leading tail 0..a0-1
+      if(b0<n-1) placeTail(b0, n-1-b0, +1);           // trailing tail b0+1..n-1
+    }
   }
 
   return {x,y};
@@ -1156,7 +1256,6 @@ function buildScene(interactive){
         frameColor=$("frameColor").value, fillColor=$("fillColor").value;
   const gap=font*0.62, circR=font*0.72, circW=+$("frameW").value;
   const numEvery=parseInt($("numEvery").value)||0;
-  const numStart=parseInt($("numOffset").value), numOff=(Number.isFinite(numStart)?numStart:1)-1;
   const rungW=Math.max(1.4,font*0.11);
   const E=(t,a,text)=>{ els.push({t,a,text}); };
   const seg=(p,q,pad)=>{ const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1,ux=dx/L,uy=dy/L;
@@ -1199,14 +1298,18 @@ function buildScene(interactive){
       if(interactive) E('circle',{cx:p.x,cy:p.y,r:Math.max(circR,font*0.6),fill:'transparent',class:'base-hit','data-s':s,'data-i':i});
     }
   });
+  const labels = numEvery>0 ? placeNumberLabels(sts,P,numEvery,font,circR) : new Map();
   sts.forEach((st,s)=>{
     for(let i=0;i<st.n;i++){
       const p=P[s][i];
       if(interactive && st.sel.has(i))
         E('circle',{cx:p.x,cy:p.y,r:font*0.82,fill:'none',stroke:SEL_RING,'stroke-width':2/M.zoom+0.8});
-      if(numEvery>0 && ((i+1)%numEvery===0 || i===0))
-        E('text',{x:p.x,y:p.y-font*0.95,'text-anchor':'middle','font-size':font*0.5,fill:NUM_COLOR,
-          'font-family':'ui-monospace,monospace'}, String(i+1+numOff));
+      const lab=labels.get(s+':'+i);
+      if(lab){
+        if(lab.leader) line(lab.leader, NUM_COLOR, Math.max(0.6,font*0.04));
+        E('text',{x:lab.x,y:lab.y,'text-anchor':'middle','dominant-baseline':'central','font-size':font*0.5,
+          fill:NUM_COLOR,'font-family':'ui-monospace,monospace'}, String(i+1));
+      }
       if(showLetter){
         const a={x:p.x,y:p.y,'text-anchor':'middle','dominant-baseline':'central',
           'font-family':'ui-monospace,Menlo,monospace','font-size':font,'font-weight':bold?700:400,
@@ -1217,6 +1320,67 @@ function buildScene(interactive){
     }
   });
   return els;
+}
+
+/* ---------- position-number placement ----------
+   Each label goes BESIDE its base, in open space — never on a loop, a stem, a line or another
+   label. Preferred direction is "away from everything the base is bonded to" (sum of unit
+   vectors from its backbone neighbours and its pair partner toward it): outside a loop, off
+   the outer side of a stem rail, straight out past a tail tip. Up to 24 directions are tried,
+   nearest-to-preferred first, at increasing distances; the first spot that clears every base
+   circle, every bond/backbone line and every label already placed wins (failing that, the
+   roomiest spot found). A label that had to be pushed past the first ring gets a thin leader
+   line back to its base so it still reads as belonging to it. Works in display coordinates,
+   so it follows rotation and dragging, and labels stay upright. */
+function placeNumberLabels(sts,P,numEvery,font,circR){
+  const pts=[], segs=[];
+  sts.forEach((st,s)=>{
+    for(let i=0;i<st.n;i++){
+      pts.push(P[s][i]);
+      if(i<st.n-1) segs.push([P[s][i],P[s][i+1]]);
+      if(st.pt[i]>i) segs.push([P[s][i],P[s][st.pt[i]]]);
+    }
+  });
+  for(const [[sa,ia],[sb,ib]] of heteroPairs()) segs.push([P[sa][ia],P[sb][ib]]);
+  const segDist=(c,[p,q])=>{ const dx=q.x-p.x, dy=q.y-p.y, L2=dx*dx+dy*dy||1;
+    const u=Math.max(0,Math.min(1,((c.x-p.x)*dx+(c.y-p.y)*dy)/L2));
+    return Math.hypot(c.x-p.x-u*dx, c.y-p.y-u*dy); };
+  const placed=[], out=new Map(), lw=font*0.5;
+  sts.forEach((st,s)=>{
+    for(let i=0;i<st.n;i++){
+      if(!((i+1)%numEvery===0 || i===0)) continue;
+      const p=P[s][i], txt=String(i+1);
+      const rl=Math.max(txt.length*lw*0.62, lw)/2 + font*0.06;      // label "radius"
+      let vx=0, vy=0;                                                // preferred: away from bonds
+      for(const j of [i-1,i+1,st.pt[i]]) if(j>=0 && j<st.n && j!==-1){
+        const dx=p.x-P[s][j].x, dy=p.y-P[s][j].y, L=Math.hypot(dx,dy)||1; vx+=dx/L; vy+=dy/L; }
+      if(Math.hypot(vx,vy)<1e-6){ vx=0; vy=-1; }
+      const a0=Math.atan2(vy,vx);
+      const order=[0]; for(let k=1;k<=12;k++){ order.push(k); if(k<12) order.push(-k); }
+      let best=null;
+      for(const ring of [1,1.5,2.1]){
+        const d=circR+rl+font*0.12+(ring-1)*font*0.9;
+        for(const k of order){
+          const a=a0+k*Math.PI/12, c={x:p.x+Math.cos(a)*d, y:p.y+Math.sin(a)*d};
+          let clr=Infinity;
+          for(const q of pts) clr=Math.min(clr, Math.hypot(c.x-q.x,c.y-q.y)-circR);
+          for(const sg of segs) clr=Math.min(clr, segDist(c,sg));
+          for(const L of placed) clr=Math.min(clr, Math.hypot(c.x-L.x,c.y-L.y)-L.r);
+          const score=clr-rl;
+          if(!best || score>best.score) best={x:c.x,y:c.y,score,ring,a};
+          if(score>=font*0.04){ best={x:c.x,y:c.y,score,ring,a}; break; }
+        }
+        if(best.score>=font*0.04) break;
+      }
+      const lab={x:best.x, y:best.y};
+      if(best.ring>1){
+        const ux=Math.cos(best.a), uy=Math.sin(best.a), dd=Math.hypot(best.x-p.x,best.y-p.y);
+        lab.leader={x1:p.x+ux*(circR+font*0.08), y1:p.y+uy*(circR+font*0.08), x2:p.x+ux*(dd-rl), y2:p.y+uy*(dd-rl)};
+      }
+      out.set(s+':'+i, lab); placed.push({x:best.x,y:best.y,r:rl});
+    }
+  });
+  return out;
 }
 
 /* ---------- render ---------- */
@@ -1306,6 +1470,10 @@ function relayout(){
   if(M.n===0) return;
   const lay=computeLayout(M.n,M.pt,SPACING,$("tailMode").value);
   M.x=lay.x; M.y=lay.y;
+  // the tail style wholly redefines where the free 5'/3' bases go, so any old drag offset on
+  // them would just distort the new shape (and made the dropdown look like it did nothing)
+  const a0=M.pt.findIndex(v=>v!==-1), b0=M.n-1-[...M.pt].reverse().findIndex(v=>v!==-1);
+  if(a0>=0) for(let i=0;i<M.n;i++) if(i<a0||i>b0){ M.offX[i]=0; M.offY[i]=0; }
   render();
 }
 
@@ -1509,7 +1677,7 @@ const LIMIT=20;
 let docs=[]; let active=-1;
 let complexes=[];   // Feature #4: two-strand hybridization complexes (see CM for live working state)
 const STYLE_IDS=['font','cLetter','cBold','cCircle','frameMode','frameColor','frameW',
-  'fillMode','fillColor','cBack','cPair','tailMode','backColor','pairColor','dupColor','numEvery','numOffset',
+  'fillMode','fillColor','cBack','cPair','tailMode','backColor','pairColor','dupColor','numEvery',
   'bgColor','cTransparent'];
 function elVal(id){ const e=$(id); return e.type==='checkbox'?e.checked:e.value; }
 function setVal(id,v){ const e=$(id); if(e.type==='checkbox') e.checked=!!v; else e.value=v; }
@@ -1843,7 +2011,7 @@ liveControl("font", e=>{ M.font=+e.target.value; $("fontVal").textContent=M.font
 liveControl("rot",  e=>{ M.rot=+e.target.value; $("rotVal").textContent=M.rot+"°"; });
 liveControl("frameW", e=>{ $("frameWVal").textContent=e.target.value+" px"; });
 liveControl("bgColor", e=>{ $("stage").style.background=e.target.value; });
-["frameColor","fillColor","backColor","pairColor","dupColor","numEvery","numOffset"].forEach(id=>liveControl(id));
+["frameColor","fillColor","backColor","pairColor","dupColor","numEvery"].forEach(id=>liveControl(id));
 document.querySelectorAll("input[data-id]").forEach(inp=>{
   inp.oninput=()=>{ M.palette[inp.dataset.id]=inp.value; render(); };   // identity colors (circles "by base")
   inp.onchange=()=>touch();
