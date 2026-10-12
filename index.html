@@ -48,7 +48,7 @@
     border-radius:6px; padding:7px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
     font-size:12px; resize:vertical;
   }
-  textarea{white-space:pre; overflow-wrap:normal; overflow-x:auto}
+  textarea{white-space:pre-wrap; word-break:break-all; line-break:anywhere; overflow-wrap:anywhere; overflow-x:hidden}  /* wrap at the same column in both boxes so sequence and structure stay aligned */
   .row{display:flex; gap:8px; align-items:center}
   .row>*{flex:1}
   button{
@@ -63,6 +63,8 @@
     border-radius:6px; background:#0e1117; cursor:pointer}
   select{width:100%; background:#0e1117; color:var(--text); border:1px solid var(--line);
     border-radius:6px; padding:6px; font-size:12px; cursor:pointer}
+  input[type=number]{-moz-appearance:textfield; appearance:textfield}
+  input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none; margin:0}
   input[type=number]{width:56px; background:#0e1117; color:var(--text);
     border:1px solid var(--line); border-radius:6px; padding:4px 6px; font-size:12px}
   .val{color:var(--text); font-variant-numeric:tabular-nums}
@@ -169,8 +171,9 @@
   <section class="pane" data-pane="layout">
     <div class="grp">
       <h2>Orientation</h2>
-      <div class="flexlabel"><label>Rotate structure (text stays upright)</label><span class="val" id="rotVal">0°</span></div>
-      <input type="range" id="rot" min="0" max="360" value="0">
+      <div class="flexlabel"><label>Rotate structure (text stays upright)</label>
+        <span class="val" style="display:flex;align-items:center;gap:3px"><input type="number" id="rotNum" min="-360" max="360" step="1" value="0" title="Type an angle from −360 to 360 (negative = counter-clockwise) and press Enter" style="width:64px;text-align:right">°</span></div>
+      <input type="range" id="rot" min="-360" max="360" value="0">
       <div class="row" style="margin-top:8px">
         <button class="mini" id="fit">Fit to view</button>
         <button class="mini" id="reset0">Rotation 0°</button>
@@ -431,7 +434,11 @@
     </div>
     <div class="grp">
       <h2>Export</h2>
-      <div class="flexlabel"><label>PNG scale</label><span class="val" id="pngDims">—</span></div>
+      <label>File name</label>
+      <input type="text" id="expName" spellcheck="false" autocomplete="off" placeholder="aptarender">
+      <div class="hint" style="margin-top:3px">Leave blank to use the sequence's name. .svg / .png is added for you.</div>
+      <label class="chk" id="expAskWrap"><input type="checkbox" id="expAsk"> Open a Save dialog (pick name &amp; folder each time)</label>
+      <div class="flexlabel" style="margin-top:8px"><label>PNG scale</label><span class="val" id="pngDims">—</span></div>
       <input type="range" id="pngScale" min="1" max="12" step="1" value="2">
       <div class="row" style="margin-top:8px">
         <button class="mini" id="expSvg">SVG</button>
@@ -455,6 +462,7 @@
   <div class="histbar" id="histbar">
     <button class="mini" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
     <button class="mini" id="redoBtn" title="Redo (Ctrl+Y)">↷ Redo</button>
+    <button class="mini" id="resetAll" title="Put the open sequence back to a fresh render: positions, colors, fills, bond colors, sizes, rotation and all style settings back to defaults. Undo (Ctrl+Z) brings it all back.">⟲ Reset to default</button>
   </div>
   <div class="badge" id="badge">—</div>
 </div>
@@ -503,15 +511,28 @@ const CM = {
 /* ---------- parse dot-bracket (nested pairs; ( ) = WC, [ ] { } < > = non-WC) ---------- */
 const OPEN={'(':')','[':']','{':'}','<':'>'};
 const CLOSE={')':'(',']':'[','}':'{','>':'<'};
+// Text copied through PowerPoint / Word / PDFs / web pages picks up characters you can't see:
+// zero-width spaces and joiners, byte-order marks, soft hyphens, direction marks, non-breaking
+// spaces, line/paragraph separators — and autocorrect turns "..." into a single "…" character and
+// may substitute full-width brackets. NFKC normalization turns "…" back into "..." and full-width
+// （）［］ into ( ) [ ]; then every whitespace, format (Cf) and control (Cc) character is dropped.
+function cleanPasted(s){
+  return String(s).normalize("NFKC").replace(/[\s\p{Cf}\p{Cc}\p{Z}]+/gu,"");
+}
+function describeChar(ch){             // for error messages: show invisible / odd characters by code
+  const cp=ch.codePointAt(0);
+  const vis=/[\p{L}\p{N}\p{P}\p{S}]/u.test(ch);
+  return vis ? `"${ch}"` : `an invisible character (U+${cp.toString(16).toUpperCase().padStart(4,"0")})`;
+}
 function parseStructure(seq, dot){
-  seq = seq.replace(/\s+/g,"").toUpperCase();
-  dot = dot.replace(/\s+/g,"");
+  seq = cleanPasted(seq).toUpperCase();
+  dot = cleanPasted(dot);
   if(seq.length===0) throw "Sequence is empty.";
   if(dot.length===0) throw "Structure is empty.";
   if(seq.length!==dot.length)
     throw `Length mismatch: sequence is ${seq.length} nt, structure is ${dot.length}.`;
   const bad = seq.match(/[^AUTGCN]/);
-  if(bad) throw `Unexpected character "${bad[0]}" in sequence (allowed: A U T G C N).`;
+  if(bad) throw `Unexpected character ${describeChar(bad[0])} at position ${bad.index+1} in sequence (allowed: A U T G C N).`;
   const n=dot.length;
   const pt=new Array(n).fill(-1);
   // nonWC[i] is set on the LOWER index of a pair when it was written with [ ], { }, or < >
@@ -532,7 +553,7 @@ function parseStructure(seq, dot){
       pt[i]=top.i; pt[top.i]=i;
       if(c!==')') nonWC[top.i]=true;
     }
-    else throw `Unexpected character "${c}" in structure at position ${i+1} (allowed: ( ) [ ] { } < > .).`;
+    else throw `Unexpected character ${describeChar(c)} in structure at position ${i+1} (allowed: ( ) [ ] { } < > .).`;
   }
   if(stack.length){ const top=stack[stack.length-1]; throw `Unbalanced "${top.c}" at position ${top.i+1} — ${stack.length} left open.`; }
   return {seq,n,pt,nonWC};
@@ -1700,6 +1721,7 @@ function zoomToSelection(){
   render();
 }
 function updateExportInfo(){
+  const en=$("expName"); if(en) en.placeholder=defaultExportName();
   if(!hasContent()){ $("pngDims").textContent="—"; return; }
   const {W,H}=contentBox(); const s=+$("pngScale").value||1;
   $("pngDims").textContent=`×${s} · ${Math.round(W*s)}×${Math.round(H*s)} px`;
@@ -1725,6 +1747,7 @@ function build(){
   M.selected.clear(); M.selBond.clear(); M.bondColor={}; M.circleColor={}; M.size={};
   applyPalette();      // default coloring
   updateSelInfo(); updateBondInfo();
+  M.rot=0; setRotUI(); // every Render starts upright, at 0°
   fit();
 }
 
@@ -1939,8 +1962,34 @@ function download(name,blob){
   const a=document.createElement("a"); a.href=url; a.download=name; a.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+// Export file name: whatever's typed in "File name", else the open sequence's / complex's name.
+// Characters that file systems reject are replaced, and a typed .svg/.png extension isn't doubled.
+function defaultExportName(){
+  const nm = CM.active ? (complexes[CM.idx]&&complexes[CM.idx].name) : (docs[active]&&docs[active].name);
+  return nm || "aptarender";
+}
+function exportFileName(ext){
+  let base=($("expName").value||"").trim() || defaultExportName();
+  base=base.replace(/\.(svg|png)$/i,"").replace(/[\\/:*?"<>|\u0000-\u001f]+/g,"_").replace(/\s+/g," ").trim() || "aptarender";
+  return base+"."+ext;
+}
+const canPickSave = typeof window.showSaveFilePicker==="function";
+// With "Open a Save dialog" ticked (Chrome/Edge), the system Save dialog opens pre-filled with the
+// name so the file can be renamed and placed anywhere; otherwise it's an ordinary download.
+async function saveBlob(blob, ext){
+  const name=exportFileName(ext);
+  if(canPickSave && $("expAsk").checked){
+    try{
+      const h=await window.showSaveFilePicker({suggestedName:name,
+        types:[{description:ext.toUpperCase()+" image", accept:{[ext==="svg"?"image/svg+xml":"image/png"]:["."+ext]}}]});
+      const w=await h.createWritable(); await w.write(blob); await w.close();
+      return;
+    }catch(err){ if(err && err.name==="AbortError") return; }   // cancelled -> do nothing; other errors fall through
+  }
+  download(name, blob);
+}
 $("expSvg").onclick=()=>{ if(!hasContent())return;
-  download("aptarender.svg",new Blob([buildExportSVG().svg],{type:"image/svg+xml"})); };
+  saveBlob(new Blob([buildExportSVG().svg],{type:"image/svg+xml"}), "svg"); };
 $("expPng").onclick=()=>{ if(!hasContent())return;
   const {svg:str,W,H}=buildExportSVG();
   const img=new Image();
@@ -1949,7 +1998,7 @@ $("expPng").onclick=()=>{ if(!hasContent())return;
     const sc=+$("pngScale").value||2, cv=document.createElement("canvas");
     cv.width=Math.round(W*sc); cv.height=Math.round(H*sc);
     const ctx=cv.getContext("2d"); ctx.scale(sc,sc); ctx.drawImage(img,0,0);
-    cv.toBlob(b=>{download("aptarender.png",b); URL.revokeObjectURL(url);});
+    cv.toBlob(b=>{saveBlob(b,"png"); URL.revokeObjectURL(url);});
   };
   img.src=url;
 };
@@ -1979,7 +2028,11 @@ function applyStyle(s){
 }
 function newDoc(name,seq,dot){ return {name:name||'seq', seq:seq||'', dot:dot||'', color:[], circleColor:{}, bondColor:{}, size:{}, offset:null, view:null, style:null}; }
 function uniform(){ return $("uniformStyle").checked; }
-function setRotUI(){ $("rot").value=M.rot; $("rotVal").textContent=M.rot+"°"; }
+// rotation runs -360..360 with 0 in the middle of the slider: a full turn either way, and a typed
+// angle shows exactly as typed (270 stays 270, -90 stays -90). Only values past a full turn wrap.
+function normRot(r){ r=+r||0; return Math.abs(r)>360 ? r%360 : r; }   // keep what was typed; only wrap past a full turn
+function fmtRot(r){ return String(Math.round(r*10)/10); }   // up to one decimal in the box
+function setRotUI(){ M.rot=normRot(M.rot); $("rot").value=Math.round(M.rot); $("rotNum").value=fmtRot(M.rot); }
 function blankCanvas(){
   M.n=0; M.selected.clear(); M.selBond.clear(); M.circleColor={}; M.bondColor={}; M.size={};
   updateSelInfo(); updateBondInfo(); render();
@@ -2037,7 +2090,7 @@ function applyDoc(i){                     // load doc i into UI + model (does NO
     M.circleColor={...d.circleColor}; M.bondColor={...d.bondColor}; M.size={...d.size};
     updateSelInfo(); updateBondInfo();
     if(d.view){ M.zoom=d.view.zoom; M.panX=d.view.panX; M.panY=d.view.panY; M.rot=d.view.rot; setRotUI(); render(); }
-    else { M.rot=+($("rot").value||0); fit(); }
+    else { M.rot=0; setRotUI(); fit(); }      // never drawn before -> start at 0°
   } else {
     blankCanvas();
     if((d.seq||"").trim() && !(d.dot||"").trim())
@@ -2278,6 +2331,16 @@ $("fastaFile").onchange=async e=>{ const f=e.target.files[0]; if(!f) return;
 $("uniformStyle").onchange=()=>{ if(!uniform()){ const s=readStyle(); docs.forEach(d=>d.style=s); } pushHistory(); };
 window.addEventListener("beforeunload",persist);
 $("seq").oninput=saveInput; $("dot").oninput=saveInput;
+for(const id of ["seq","dot"]) $(id).addEventListener("paste",e=>{
+  const raw=(e.clipboardData||window.clipboardData)?.getData("text");
+  if(raw==null) return;
+  const clean=cleanPasted(raw);
+  if(clean===raw) return;                // nothing hidden in it: let the browser paste normally
+  e.preventDefault();
+  const ta=e.target, s=ta.selectionStart, en=ta.selectionEnd;
+  ta.setRangeText(clean, s, en, "end");
+  saveInput();
+});
 $("clear").onclick=()=>{                  // blank the active sequence (keeps it in the list)
   leaveComplex();
   $("seq").value=""; $("dot").value=""; $("err").textContent="";
@@ -2292,7 +2355,13 @@ function liveControl(id, onInput){
   $(id).onchange=()=>touch();
 }
 liveControl("font", e=>{ M.font=+e.target.value; $("fontVal").textContent=M.font+" px"; });
-liveControl("rot",  e=>{ M.rot=+e.target.value; $("rotVal").textContent=M.rot+"°"; });
+liveControl("rot",  e=>{ M.rot=+e.target.value; $("rotNum").value=fmtRot(M.rot); });
+// typed angle: applies as you type (any number; outside -180..180 is folded into range, decimals
+// allowed), and Enter / leaving the box records one undo step and tidies the shown value
+$("rotNum").oninput=e=>{ const v=parseFloat(e.target.value); if(!Number.isFinite(v)) return;
+  M.rot=normRot(v); $("rot").value=Math.round(M.rot); render(); };
+$("rotNum").onchange=()=>{ setRotUI(); render(); touch(); };
+$("rotNum").onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); e.target.blur(); } };
 liveControl("frameW", e=>{ $("frameWVal").textContent=e.target.value+" px"; });
 liveControl("bgColor", e=>{ $("stage").style.background=e.target.value; });
 ["frameColor","fillColor","backColor","pairColor","dupColor","numEvery"].forEach(id=>liveControl(id));
@@ -2361,6 +2430,15 @@ $("bondReset").onclick=()=>{M.bondColor={};M.selBond.clear();updateBondInfo();re
 ["cCircle","cBack","cPair","cLetter","cBold","frameMode","fillMode","cTransparent"].forEach(id=>$(id).onchange=()=>{render(); touch();});
 $("tailMode").onchange=()=>{relayout(); touch();};
 $("pngScale").oninput=updateExportInfo;
+document.addEventListener("wheel",e=>{
+  const el=document.activeElement;
+  if(el && el.type==="number" && e.target===el) el.blur();   // scrolling over a focused box no longer edits it
+},{passive:true});
+if(!canPickSave){            // Safari / Firefox: no Save-dialog API — say how to get one
+  $("expAsk").disabled=true;
+  $("expAskWrap").title="Not supported in this browser. In Safari: Settings → General → File download location → Ask for each download.";
+  $("expAskWrap").style.opacity=0.55;
+}
 
 /* examples — load into the active sequence */
 $("ex1").onclick=()=>{                 // simple hairpin with a bulge
@@ -2426,6 +2504,32 @@ $("selbar").style.display='none';   // hidden on the Input tab at start
 /* initial */
 window.addEventListener("resize",()=>{ if(hasContent()) render(); });
 $("stage").style.background=$("bgColor").value;
+/* ---------- Reset to default ----------
+   DEFAULT_STYLE is captured from the controls' HTML defaults before init() restores any saved state,
+   so it's always the factory look. resetToDefault() undoes every customization of what's open:
+   style controls (shared by all sequences while "Uniform style" is on), letter colors (back to the
+   palette), circle fills, bond colors, per-base sizes, manual positions, rotation (0°) and the
+   selection; it re-lays out (the tail style may have changed) and refits. One undo step. */
+const DEFAULT_STYLE=readStyle();
+function resetToDefault(){
+  if(!hasContent()) return;
+  if(ringLock) unlockRing();
+  applyStyle(DEFAULT_STYLE);
+  if(!uniform() && !CM.active && docs[active]) docs[active].style=readStyle();
+  readPalette();
+  for(const st of strands()){
+    for(let i=0;i<st.n;i++) st.color[i]=M.palette[st.seq[i]]||FALLBACK_COLOR;
+    for(const m of [st.circleColor, st.bondColor, st.size]) if(m) for(const k in m) delete m[k];
+    st.offX.fill(0); st.offY.fill(0); st.sel.clear();
+  }
+  M.selBond.clear();
+  M.rot=0; setRotUI();
+  updateSelInfo(); updateBondInfo();
+  relayout(); fit();
+  touch();
+}
+$("resetAll").onclick=resetToDefault;
+
 (function init(){
   let saved=null;
   try{ saved=JSON.parse(localStorage.getItem("aptarender_docs")||"null"); }catch(e){}

@@ -2,6 +2,35 @@
 
 All notable changes to AptaRender. Newest first.
 
+## 2026-10-12
+- **Type a rotation angle:** the degree readout next to the Rotate slider is now an editable box.
+  Type an angle and press Enter; the slider follows, and dragging the slider updates the box.
+  Each typed angle is one undo step.
+- **Rotation range is now −360° to 360°** (0 still in the middle): a full turn either way, and a
+  typed angle stays exactly as typed — 270 shows as 270 with the slider at 270, instead of being
+  converted to −90. Only angles past a full turn wrap (450 → 90).
+- **No more up/down arrows on number boxes.** They were hard to see on the dark panel and easy to
+  click by accident. Scrolling the mouse wheel over a focused number box no longer changes it
+  either. Keyboard ↑/↓ still nudge the value if you want it.
+- **Render always starts at 0°.** Clicking Render (and opening a sequence that hasn't been drawn
+  yet, e.g. a newly added one) resets the rotation to 0°. Sequences you've already arranged still
+  reopen exactly as you left them.
+- **Reset to default** button (next to Undo/Redo): puts the open sequence or complex back to a
+  fresh render — positions, letter colors, circle fills, bond colors, base sizes, rotation and all
+  style settings back to defaults. One Undo brings it all back.
+- **Long sequences wrap** in the Sequence and Structure boxes instead of running off the side.
+  Both boxes break at the same column, so each structure character stays under its base.
+- **Fixed — "Unexpected character \"\"" after pasting from PowerPoint:** text copied through
+  PowerPoint, Word, PDFs or web pages carries invisible characters (zero-width spaces, byte-order
+  marks, soft hyphens, non-breaking spaces, line separators) and autocorrect turns "..." into a
+  single "…". These are now cleaned automatically, both when you paste into the boxes and when the
+  structure is read; "…" counts as three dots and full-width brackets as normal ones. If something
+  really is wrong, the error now gives the position and names invisible characters by code.
+- **Rotate in both directions:** the rotation slider is centred on 0 so it turns either way.
+- **Choose the export file name:** new **File name** box on the Export tab (blank = the
+  sequence's name; .svg/.png added automatically). In Chrome/Edge, **Open a Save dialog** lets you
+  rename and pick a folder for each export.
+
 ## 2026-10-07
 - **Varna-style ring rotation** (Layout tab → **Lock ring**). Ctrl/⌘+click an unpaired base of a
   loop, click **Lock ring**, then drag any helix attached to that ring to swing it around the
