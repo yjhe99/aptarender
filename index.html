@@ -110,6 +110,14 @@
     font-size:15px; line-height:1; padding:0 4px; cursor:pointer}
   .docrow .docdel:hover{color:var(--danger)}
   #docCount{font-weight:400; color:var(--muted); text-transform:none; letter-spacing:0; font-size:10.5px}
+  .cxseg{display:flex; align-items:center; gap:4px; margin-top:4px}
+  .cxseg .cxseglbl{width:12px; font-weight:700; color:var(--muted); text-align:center; font-size:11px}
+  .cxseg .cxnum{width:46px; flex:0 0 auto}
+  .cxseg .cxsegx{flex:0 0 auto; width:20px; text-align:center; background:transparent; border:none;
+    color:var(--muted); font-size:15px; line-height:1; cursor:pointer; padding:0}
+  .cxseg .cxsegx:hover{color:var(--danger)}
+  .cxseghdr{margin-top:6px}
+  .cxseghdr .cxh{color:var(--muted); font-size:10px; text-align:center}
 </style>
 </head>
 <body>
@@ -386,18 +394,11 @@
       <select id="cxDocA"></select>
       <label>Strand B</label>
       <select id="cxDocB"></select>
-      <div class="row" style="margin-top:6px">
-        <div>
-          <label>A range (1-based, inclusive)</label>
-          <div class="row"><input type="number" id="cxAStart" min="1" value="1">
-            <input type="number" id="cxAEnd" min="1" value="1"></div>
-        </div>
-        <div>
-          <label>B range (1-based, inclusive)</label>
-          <div class="row"><input type="number" id="cxBStart" min="1" value="1">
-            <input type="number" id="cxBEnd" min="1" value="1"></div>
-        </div>
-      </div>
+      <label style="margin-top:6px">Duplex regions (1-based, inclusive) — each A range pairs antiparallel with its B range</label>
+      <div class="cxseg cxseghdr"><span class="cxseglbl">A</span><span class="cxnum cxh">start</span><span class="cxnum cxh">end</span>
+        <span class="cxseglbl">B</span><span class="cxnum cxh">start</span><span class="cxnum cxh">end</span><span class="cxsegx"></span></div>
+      <div id="cxSegList"></div>
+      <button class="mini" id="cxAddSeg" style="margin-top:6px">+ Add duplex region</button>
       <label style="margin-top:8px">Mode</label>
       <select id="cxMode">
         <option value="replace">Replace — break any existing pair that touches/spans the region</option>
@@ -414,7 +415,9 @@
         pairs inside the chosen range) and B is laid out running parallel to it — the same A bases can
         end up with two drawn bonds (their own, plus the new one to B). This isn't biophysically
         possible for real base pairing, but the tool won't stop you — draw what communicates the
-        figure you need. Exactly one contiguous region either way in this version.</div>
+        figure you need. <b>Multiple duplex regions</b> are supported in Replace mode (each is drawn as its
+        own ladder, with the single-stranded bases between them as connecting loops — drag to tidy if a
+        set stacks awkwardly). Side-by-side mode uses the first region only.</div>
     </div>
     <div class="grp">
       <h2>Duplex rung color</h2>
@@ -884,6 +887,12 @@ function validateRegion({aStart,aEnd,bStart,bEnd}, nA, nB){
 // openComplex, relayoutComplex and the Build button, which is how a new mode could get wired
 // into one and forgotten in another). Parses both source docs fresh; never throws — returns
 // {error} instead so every caller can just show it.
+// A complex may carry a single `region` (legacy) or a list of duplex `segments`. This returns the
+// segment list either way, so every consumer can treat single- and multi-duplex complexes alike.
+function cxSegments(c){
+  if(c && c.segments && c.segments.length) return c.segments;
+  return [c.region];
+}
 function layoutComplex(c){
   if(!c) return {error:"No such complex."};
   const docA=docs[c.docA], docB=docs[c.docB];
@@ -892,10 +901,18 @@ function layoutComplex(c){
   try{ pA=parseStructure(docA.seq,docA.dot); pB=parseStructure(docB.seq,docB.dot); }
   catch(e){ return {error:"⚠ Both strands need a valid sequence+structure: "+e}; }
   const tm=$("tailMode").value;
+  const segs=cxSegments(c);
   try{
-    const lay = c.mode==='side'
-      ? computeSideHybridLayout(pA.seq,pA.pt,pB.seq,pB.pt,c.region,SPACING,tm,tm)
-      : computeComplexLayout(pA.seq,pA.pt,pB.seq,pB.pt,c.region,SPACING,tm);
+    let lay, note=null;
+    if(c.mode==='side'){
+      if(segs.length>1) note="Side-by-side mode uses the first duplex region only — switch to Replace mode for multiple regions.";
+      lay=computeSideHybridLayout(pA.seq,pA.pt,pB.seq,pB.pt,segs[0],SPACING,tm,tm);
+    } else if(segs.length>1){
+      lay=computeComplexLayoutMulti(pA.seq,pA.pt,pB.seq,pB.pt,segs,SPACING,tm);
+    } else {
+      lay=computeComplexLayout(pA.seq,pA.pt,pB.seq,pB.pt,segs[0],SPACING,tm);
+    }
+    if(note) lay.warning=lay.warning ? lay.warning+" "+note : note;
     return {pA,pB,lay,docA,docB};
   } catch(e){ return {error:"⚠ "+e}; }
 }
@@ -1103,6 +1120,102 @@ function computeComplexLayout(seqA, ptAOrig, seqB, ptBOrig, region, S, tailMode)
   return {xA,yA,xB,yB,ptA,ptB,dupLen,broken};
 }
 
+// ---- multiple duplex segments: "Ladder stack + drag" ----
+// Stacks each duplex as its own straight ladder, left->right in strand-A order, and fills the
+// single-stranded bases between/around the ladders as loops (bowing away from the duplex axis) or
+// free flanks. Co-linear segment sets come out clean; a crossing / pseudoknot-like set still draws
+// (its connecting loop just takes the long way round) and is meant to be tidied with drag.
+// Places m points from p0 to p1 on a circular arc bowing toward unit vector `bulge`; bonds ~ S.
+function arcRun(p0, p1, m, bulge, S){
+  if(m<=0) return [];
+  let dx=p1.x-p0.x, dy=p1.y-p0.y, L=Math.hypot(dx,dy);
+  const bonds=m+1, want=bonds*S;
+  if(L<1e-6){ dx=1; dy=0; L=1e-6; }
+  if(want<=L+1e-9){                                    // chord already long enough — just space along it
+    const out=[]; for(let i=1;i<=m;i++){ const t=i/bonds; out.push({x:p0.x+dx*t, y:p0.y+dy*t}); }
+    return out;
+  }
+  const ratio=L/want;                                 // = 2 sin(a/2)/a for the central angle a
+  let lo=1e-4, hi=2*Math.PI-1e-4;
+  for(let it=0;it<60;it++){ const mid=(lo+hi)/2; if(2*Math.sin(mid/2)/mid > ratio) lo=mid; else hi=mid; }
+  const alpha=(lo+hi)/2, R=want/alpha;
+  const mx=(p0.x+p1.x)/2, my=(p0.y+p1.y)/2, ux=dx/L, uy=dy/L;
+  let nx=-uy, ny=ux;                                  // chord normal
+  if(nx*bulge.x+ny*bulge.y > 0){ nx=-nx; ny=-ny; }    // center sits on the side AWAY from the bow
+  const h=R*Math.cos(alpha/2), cx=mx+nx*h, cy=my+ny*h;
+  const a0=Math.atan2(p0.y-cy,p0.x-cx);
+  const eP=a=>({x:cx+R*Math.cos(a), y:cy+R*Math.sin(a)});
+  const eP1=eP(a0+alpha), eM1=eP(a0-alpha);
+  const s=(Math.hypot(eM1.x-p1.x,eM1.y-p1.y) < Math.hypot(eP1.x-p1.x,eP1.y-p1.y)) ? -1 : 1;
+  const out=[];
+  for(let i=1;i<=m;i++){ const t=i/bonds, a=a0+s*alpha*t; out.push({x:cx+R*Math.cos(a), y:cy+R*Math.sin(a)}); }
+  return out;
+}
+// Outward angle (deg) for a flank: walk from anchor `idx` toward the structure until a duplex base,
+// then point from that base back out through the anchor.
+function flankDeg(x,y,idx,towardInside,isDup,n){
+  let k=idx+towardInside; while(k>=0 && k<n && !isDup[k]) k+=towardInside;
+  if(k<0||k>=n) return towardInside<0 ? 0 : 180;
+  return Math.atan2(y[idx]-y[k], x[idx]-x[k])*180/Math.PI;
+}
+function computeComplexLayoutMulti(seqA, ptAOrig, seqB, ptBOrig, segmentsIn, S, tailMode){
+  const nA=seqA.length, nB=seqB.length;
+  const segs=segmentsIn.map(s=>({aStart:s.aStart,aEnd:s.aEnd,bStart:s.bStart,bEnd:s.bEnd,dupLen:validateRegion(s,nA,nB)}));
+  segs.sort((p,q)=>p.aStart-q.aStart);
+  for(let g=1;g<segs.length;g++) if(segs[g].aStart<=segs[g-1].aEnd) throw "Two duplex regions overlap on strand A.";
+  const bsorted=[...segs].sort((p,q)=>p.bStart-q.bStart);
+  for(let g=1;g<bsorted.length;g++) if(bsorted[g].bStart<=bsorted[g-1].bEnd) throw "Two duplex regions overlap on strand B.";
+
+  let ptA=ptAOrig.slice(), ptB=ptBOrig.slice(), broken=0;
+  for(const s of segs){ broken+=countBrokenForDuplex(ptA,s.aStart,s.aEnd); ptA=breakForDuplex(ptA,s.aStart,s.aEnd); }
+  for(const s of segs){ broken+=countBrokenForDuplex(ptB,s.bStart,s.bEnd); ptB=breakForDuplex(ptB,s.bStart,s.bEnd); }
+
+  const xA=new Array(nA).fill(0), yA=new Array(nA).fill(0);
+  const xB=new Array(nB).fill(0), yB=new Array(nB).fill(0);
+  const rungY=S*1.6, GAPX=S*1.6;
+  const isDupA=new Array(nA).fill(false), isDupB=new Array(nB).fill(false);
+  let cursorX=0;
+  for(const s of segs){
+    for(let k=0;k<s.dupLen;k++){
+      xA[s.aStart+k]=cursorX+k*S; yA[s.aStart+k]=0;     isDupA[s.aStart+k]=true;
+      xB[s.bEnd-k]=cursorX+k*S;   yB[s.bEnd-k]=rungY;   isDupB[s.bEnd-k]=true;   // antiparallel
+    }
+    cursorX += s.dupLen*S + GAPX;
+  }
+  const occupied=[];
+  for(const s of segs) for(let k=0;k<s.dupLen;k++){
+    occupied.push({x:xA[s.aStart+k],y:yA[s.aStart+k]});
+    occupied.push({x:xB[s.bEnd-k],y:yB[s.bEnd-k]});
+  }
+  function fill(n,isDup,pt,x,y,bulgeY){
+    let i=0;
+    while(i<n){
+      if(isDup[i]){ i++; continue; }
+      let j=i; while(j<n && !isDup[j]) j++;
+      const m=j-i, local=sliceFlankPT(pt,i,j);
+      const hasL=i>0 && isDup[i-1], hasR=j<n && isDup[j];
+      if(hasL && hasR){                                 // single-stranded run between two ladders -> loop
+        const pts=arcRun({x:x[i-1],y:y[i-1]},{x:x[j],y:y[j]}, m, {x:0,y:bulgeY}, S);
+        for(let t=0;t<m;t++){ x[i+t]=pts[t].x; y[i+t]=pts[t].y; occupied.push(pts[t]); }
+      } else if(hasR){                                   // leading flank (anchor is base j)
+        const at=attachFlankContinuing(local, m-1, S, tailMode, x[j], y[j], flankDeg(x,y,j,+1,isDup,n), occupied);
+        for(let t=0;t<m;t++){ x[i+t]=at.x[t]; y[i+t]=at.y[t]; }
+      } else if(hasL){                                   // trailing flank (anchor is base i-1)
+        const at=attachFlankContinuing(local, 0, S, tailMode, x[i-1], y[i-1], flankDeg(x,y,i-1,-1,isDup,n), occupied);
+        for(let t=0;t<m;t++){ x[i+t]=at.x[t]; y[i+t]=at.y[t]; }
+      } else {                                           // strand with no duplex at all (defensive)
+        const lay=computeLayout(m, local, S, tailMode);
+        for(let t=0;t<m;t++){ x[i+t]=lay.x[t]; y[i+t]=lay.y[t]; occupied.push({x:x[i+t],y:y[i+t]}); }
+      }
+      i=j;
+    }
+  }
+  fill(nA,isDupA,ptA,xA,yA,-1);                          // A: loops/flanks bow up
+  fill(nB,isDupB,ptB,xB,yB,+1);                          // B: loops/flanks bow down
+  const dupLen=segs.reduce((a,s)=>a+s.dupLen,0);
+  return {xA,yA,xB,yB,ptA,ptB,dupLen,broken,segs};
+}
+
 // ---- alternate complex mode: SIDE hybridization (don't break anything) ----
 // Neither strand's own intramolecular pairing is touched — A is laid out completely normally via
 // the ordinary computeLayout (its own stem stays exactly where a single-sequence render would put
@@ -1231,8 +1344,12 @@ function strands(){
 // inter-strand (hetero-duplex) rungs as [[strandIdx,i],[strandIdx,j]] — empty outside complex mode
 function heteroPairs(){
   if(!CM.active || !complexes[CM.idx]) return [];
-  const r=complexes[CM.idx].region, out=[];
-  for(let k=0;k<CM.dupLen;k++) out.push([[0,r.aStart+k],[1,r.bEnd-k]]);
+  const c=complexes[CM.idx], out=[];
+  const segs = c.mode==='side' ? [cxSegments(c)[0]] : cxSegments(c);   // side mode lays out one region
+  for(const s of segs){
+    const d=s.aEnd-s.aStart+1;
+    for(let k=0;k<d;k++) out.push([[0,s.aStart+k],[1,s.bEnd-k]]);
+  }
   return out;
 }
 function hasContent(){ return strands().some(st=>st.n>0); }
@@ -2123,10 +2240,12 @@ function renameDoc(i){
 }
 
 /* ---------- complex management (Feature #4) ---------- */
-function newComplex(name,docA,docB,aStart,aEnd,bStart,bEnd,mode){
+function newComplex(name,docA,docB,segments,mode){
+  const segs=(segments&&segments.length)
+    ? segments.map(s=>({aStart:s.aStart||0,aEnd:s.aEnd||0,bStart:s.bStart||0,bEnd:s.bEnd||0}))
+    : [{aStart:0,aEnd:0,bStart:0,bEnd:0}];
   return { name:name||'complex', docA:docA??0, docB:docB??0, mode:mode||'replace',
-    region:{aStart:aStart||0,aEnd:aEnd||0,bStart:bStart||0,bEnd:bEnd||0},
-    offsetA:null, offsetB:null, view:null };
+    region:{...segs[0]}, segments:segs, offsetA:null, offsetB:null, view:null };
 }
 // loads complex i into CM + the shared view (M.zoom/pan/rot) and switches the canvas into complex mode
 function openComplex(i){
@@ -2187,21 +2306,39 @@ function refreshComplexPickers(){
   if(docs[prevA]) $("cxDocA").value=prevA;
   if(docs.length>1){ $("cxDocB").value = (prevB && docs[prevB] && prevB!==prevA) ? prevB : String(Math.min(1,docs.length-1)); }
 }
+// working list of duplex regions in the Build panel (1-based, as typed)
+let cxSegDraft=[{a0:1,a1:1,b0:1,b1:1}];
+function renderCxSegs(){
+  const el=$("cxSegList"); if(!el) return; el.innerHTML='';
+  cxSegDraft.forEach((s,i)=>{
+    const row=document.createElement('div'); row.className='cxseg';
+    const num=key=>{ const inp=document.createElement('input'); inp.type='number'; inp.min='1';
+      inp.className='cxnum'; inp.value=s[key]; inp.oninput=()=>{ s[key]=Math.max(1,+inp.value||1); }; return inp; };
+    const lblA=document.createElement('span'); lblA.className='cxseglbl'; lblA.textContent='A';
+    const lblB=document.createElement('span'); lblB.className='cxseglbl'; lblB.textContent='B';
+    row.append(lblA, num('a0'), num('a1'), lblB, num('b0'), num('b1'));
+    const x=document.createElement('button'); x.className='cxsegx'; x.textContent='×'; x.title='Remove region';
+    x.onclick=()=>{ if(cxSegDraft.length>1){ cxSegDraft.splice(i,1); renderCxSegs(); } };
+    row.append(x); el.append(row);
+  });
+}
+$("cxAddSeg").onclick=()=>{ const last=cxSegDraft[cxSegDraft.length-1]||{a0:1,a1:1,b0:1,b1:1};
+  cxSegDraft.push({a0:last.a1+1,a1:last.a1+1,b0:last.b1+1,b1:last.b1+1}); renderCxSegs(); };
+renderCxSegs();
 $("cxBuild").onclick=()=>{
   $("cxErr").textContent="";
   const ai=+$("cxDocA").value, bi=+$("cxDocB").value;
   if(!Number.isInteger(ai)||!Number.isInteger(bi)||!docs[ai]||!docs[bi]){ $("cxErr").textContent="Pick both strands."; return; }
   if(ai===bi){ $("cxErr").textContent="Strand A and B must be different sequences."; return; }
   saveActive();      // flush any pending edits in the textboxes before reading seq/dot
-  const c=newComplex(`${docs[ai].name||'A'} × ${docs[bi].name||'B'}`, ai, bi,
-    (+$("cxAStart").value||1)-1, (+$("cxAEnd").value||1)-1, (+$("cxBStart").value||1)-1, (+$("cxBEnd").value||1)-1,
-    $("cxMode").value);
+  const segments=cxSegDraft.map(s=>({aStart:s.a0-1, aEnd:s.a1-1, bStart:s.b0-1, bEnd:s.b1-1}));
+  const c=newComplex(`${docs[ai].name||'A'} × ${docs[bi].name||'B'}`, ai, bi, segments, $("cxMode").value);
   const probe=layoutComplex(c);             // validate before adding it to the list
   if(probe.error){ $("cxErr").textContent=probe.error; return; }
   complexes.push(c);
   const lay=openComplex(complexes.length-1);
   const notes=[];
-  if(lay && lay.broken>0) notes.push(`Built — ${lay.broken} existing base pair(s) touching or spanning the duplex region were broken.`);
+  if(lay && lay.broken>0) notes.push(`Built — ${lay.broken} existing base pair(s) touching or spanning a duplex region were broken.`);
   if(lay && lay.warning) notes.push(lay.warning);
   if(notes.length) $("cxErr").textContent=notes.join(' ');
   pushHistory();
@@ -2258,6 +2395,7 @@ function serializeState(){
       view:d.view?{...d.view}:null, style:d.style?JSON.parse(JSON.stringify(d.style)):null})),
     active,
     complexes: complexes.map(c=>({name:c.name, docA:c.docA, docB:c.docB, mode:c.mode, region:{...c.region},
+      segments:(c.segments||cxSegments(c)).map(s=>({...s})),
       offsetA:c.offsetA?{x:c.offsetA.x.slice(),y:c.offsetA.y.slice()}:null,
       offsetB:c.offsetB?{x:c.offsetB.x.slice(),y:c.offsetB.y.slice()}:null,
       view:c.view?{...c.view}:null})),

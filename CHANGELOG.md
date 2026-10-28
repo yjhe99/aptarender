@@ -2,6 +2,15 @@
 
 All notable changes to AptaRender. Newest first.
 
+## 2026-10-28 — v2.2.0
+- **Multiple duplex regions in a complex.** A two-strand complex can now hybridize over several
+  separate regions at once (e.g. A 1–11 & 16–27 with B 2–12 & 16–27) instead of a single
+  contiguous duplex. In the Complex tab, add as many A↔B region rows as you need with "+ Add duplex
+  region" (each A range pairs antiparallel with its B range; equal lengths). In Replace mode each
+  region is drawn as its own straight ladder, stacked left-to-right, with the single-stranded bases
+  between them drawn as connecting loops. Co-linear region sets lay out cleanly; a crossing /
+  awkward set still draws and can be tidied with drag. Side-by-side mode uses the first region only.
+
 ## 2026-10-12
 - **Type a rotation angle:** the degree readout next to the Rotate slider is now an editable box.
   Type an angle and press Enter; the slider follows, and dragging the slider updates the box.
