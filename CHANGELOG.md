@@ -2,7 +2,29 @@
 
 All notable changes to AptaRender. Newest first.
 
-## 2026-10-30 — v2.2.3
+## 2026-10-30 — v2.2.4
+- Right-click menu, **Number** row: the dropdown is now a **Show** checkbox (ticked = this base's number
+  is shown). A base whose box matches the "Number every" rule keeps following that rule.
+- **Circle it**: draws a circle around that base's number, in the number's color.
+- **Number color** for a single base (with a "default" button to go back to the Lines-tab color).
+  Circling or coloring a number also shows it. Both work with "Base + its pair" / "All selected",
+  are saved, undoable and exported.
+- **Colors .txt** also saves per-base number colors (new color-file target `number`).
+- **5′ / 3′ end labels** (Lines tab → Numbering & end labels → **Show 5′ / 3′ end labels**): labels every
+  strand's ends (both strands in a complex), placed in open space past the end like position numbers.
+  Own size slider, color and bold.
+- **Bigger, colored position numbers**: new **Number size** slider (30–200% of the letter size),
+  **Color** and **Bold**. Large labels move further out if needed and stay inside exported SVG/PNG.
+- **Right-click a base** (two-finger click on a Mac) to open a small menu for that one base:
+  - **Number**: Auto (follows "Number every"), Always show, or Hide — e.g. number just the bases you care about.
+  - **Letter color**, **Circle fill**, **Outline color**, **Outline width** (0–12 px), **Size** (50–300%).
+  - **Apply to**: this base, the base + its pair (also across strands in a complex), or all selected bases.
+  - **Reset base**, and "default" buttons to drop a single override.
+  The bases being edited are outlined while the menu is open; changes show live, each is one undo
+  step, and everything is saved and exported. Ctrl+click on a Mac keeps its old meaning (select part).
+- **Colors .txt** now also saves per-base outline colors (new color-file target `outline`).
+
+## 2026-10-30 — v2.2.1-3
 - **Bend selected curve** (Layout tab): select a stretch of unpaired bases (a free end or a loop) and
   click **↻ Curl clockwise** or **↺ Curl counter-clockwise** to bend it into a smooth arc; each click
   curls it more, the other button flattens it and then bends it the other way, and **Straighten**
@@ -13,8 +35,6 @@ All notable changes to AptaRender. Newest first.
   base it hangs from, so a free end can be swung to set off in a new direction before curling it.
 - Example (NanoCluster Beacon, case 6): Flip ↔, Flip ↕, then curl the G-rich end ↻ 13° and the C-rich
   end ↻ 21°: two concentric rings, G outside and C inside, nothing overlapping.
-
-## 2026-10-30 — v2.2.2
 - **Save strands as text** (Export tab → **Strands .txt**): writes the open sequence, or both strands of
   the open complex, as a plain text file: `>name`, sequence, dot-bracket structure (readable as FASTA).
   A complex also gets one `@complex` line with its duplex regions, mode and name. Re-open it with
@@ -27,8 +47,6 @@ All notable changes to AptaRender. Newest first.
   and use the Save dialog when that box is ticked.
 - Import file now ignores `#` comment lines.
 - Not saved in either file: hand-placed positions/flips, bond colors and per-base sizes.
-
-## 2026-10-30 — v2.2.1
 - **Flip / mirror** (Layout tab → Rotate / flip selection): new **Flip ↔ horizontal** and **Flip ↕ vertical**
   buttons. With bases selected they mirror just the selection about the chosen pivot (attachment point
   or center); with nothing selected they mirror the whole drawing about its center. The flip is always
