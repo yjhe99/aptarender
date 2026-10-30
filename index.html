@@ -153,6 +153,7 @@
         <button class="mini" id="importBtn">Import file…</button>
         <input type="file" id="fastaFile" accept=".fa,.fasta,.txt,.dbn,.seq,.dot" style="display:none">
       </div>
+      <div class="hint" style="margin-top:4px">Import also re-opens a <b>Strands .txt</b> saved from the Export tab, complex included.</div>
       <label class="chk" style="margin-top:8px"><input type="checkbox" id="uniformStyle" checked> Uniform style across all</label>
       <div class="hint" id="docHint">Up to 20 sequences. FASTA (or seq+structure) files supported.</div>
     </div>
@@ -213,7 +214,7 @@
       <div class="hint" id="ringInfo"></div>
     </div>
     <div class="grp">
-      <h2>Rotate selection</h2>
+      <h2>Rotate / flip selection</h2>
       <div class="row">
         <input type="number" id="rotSelDeg" value="15" step="5" style="flex:0 0 64px">
         <span style="flex:0 0 auto;color:var(--muted);font-size:11px">° (+ = clockwise)</span>
@@ -222,11 +223,37 @@
       <select id="rotSelPivot">
         <option value="attach">Attachment point (where the part joins the rest)</option>
         <option value="centroid">Center of the selection</option>
+        <option value="joint">Joint (the unselected base it hangs from)</option>
       </select>
       <div class="row" style="margin-top:8px">
         <button class="mini" id="rotSelGo">Rotate selected</button>
       </div>
+      <div class="row" style="margin-top:6px">
+        <button class="mini" id="flipH" title="Mirror left ↔ right on screen">Flip ↔ horizontal</button>
+        <button class="mini" id="flipV" title="Mirror top ↕ bottom on screen">Flip ↕ vertical</button>
+      </div>
+      <div class="hint">Flips mirror the selected bases about the pivot. With nothing selected they flip the
+        whole drawing about its center. Letters stay readable (they aren't mirrored).</div>
       <div class="hint" id="rotSelInfo"></div>
+    </div>
+    <div class="grp">
+      <h2>Bend selected curve</h2>
+      <div class="hint" style="margin-top:0">Select a stretch of unpaired bases (Ctrl/⌘+click a free end or loop,
+        or Shift+drag), then curl it. <b>↻</b> / <b>↺</b> make it turn clockwise / counter-clockwise on screen
+        as it runs away from the base it hangs from (a loop runs 5′→3′). Each click curls it more; the other
+        button flattens it, then bends it the other way. Bases stay one bond apart and the base it hangs from
+        stays put. To change the direction it sets off in, use <b>Rotate selected</b> with Pivot = <b>Joint</b> first.</div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="bendCW" title="Curl clockwise">↻ Curl clockwise</button>
+        <button class="mini" id="bendCCW" title="Curl counter-clockwise">↺ Curl counter-clockwise</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="mini" id="bendFlat">Straighten</button>
+        <span style="flex:0 0 auto;color:var(--muted);font-size:11px;margin-left:8px">Step</span>
+        <input type="number" id="bendStep" value="5" min="1" max="30" step="1" style="flex:0 0 56px">
+        <span style="flex:0 0 auto;color:var(--muted);font-size:11px">° per base</span>
+      </div>
+      <div class="hint" id="bendInfo"></div>
     </div>
     <div class="grp">
       <h2>Free tails</h2>
@@ -300,6 +327,7 @@
       <div class="row" style="margin-top:8px">
         <button class="mini" id="colorFileBtn">Upload color file…</button>
         <button class="mini" id="colorSample">Download sample</button>
+        <button class="mini" id="colorSave" title="Save the colors you see now, to re-apply later">Save current colors</button>
         <input type="file" id="colorFile" accept=".txt,.tsv,.csv,text/plain" style="display:none">
       </div>
       <div class="hint" id="colorFileInfo"></div>
@@ -448,6 +476,14 @@
         <button class="mini" id="expPng">PNG</button>
       </div>
       <div class="hint">SVG stays fully editable in Illustrator/Inkscape — every base is its own text element. PNG dimensions shown above.</div>
+      <label style="margin-top:10px">Save as text (to re-open later)</label>
+      <div class="row" style="margin-top:4px">
+        <button class="mini" id="expStrands" title="Sequences, structures and complex regions of what's open">Strands .txt</button>
+        <button class="mini" id="expColors" title="Current letter and circle colors, in the color-file format">Colors .txt</button>
+      </div>
+      <div class="hint">Strands: re-open with Input → <b>Import file…</b> (a complex is rebuilt with its duplex
+        regions). Colors: re-apply with Letters → <b>Upload color file…</b>.</div>
+      <div class="hint" id="expInfo"></div>
     </div>
     <div class="grp tight" id="contact">
       <h2>Contact &amp; feedback</h2>
@@ -1790,6 +1826,55 @@ function colorSampleText(){
   return L.join("\n")+"\n";
 }
 
+/* ---------- save what's open as text, to re-open later ----------
+   Strands file = FASTA records (>name / sequence / structure) that any FASTA reader understands,
+   plus, for a complex, ONE "@complex" line that importFasta() turns back into the complex.
+   Colors file  = the exact color-file format parseColorFile() reads, so it round-trips with no new
+   parser: runs of the same color collapse into ranges; circle colors only where one is set.
+   Neither file holds hand-placed positions, bond colors or base sizes (they live in localStorage). */
+function strandsFileText(){
+  const L=["# AptaRender strands file — re-open with Input → Import file…",
+           "# Records: >name, then the sequence, then its dot-bracket structure."];
+  if(CM.active){
+    const c=complexes[CM.idx]; if(!c) return null;
+    const same=c.docA===c.docB, recs=same?[docs[c.docA]]:[docs[c.docA],docs[c.docB]];
+    for(const d of recs) L.push(">"+(d.name||"seq"), cleanPasted(d.seq), cleanPasted(d.dot));
+    const segs=cxSegments(c).map(s=>`${s.aStart+1}-${s.aEnd+1}:${s.bStart+1}-${s.bEnd+1}`);
+    L.push("#", "# Complex: strand A = record 1, strand B = record "+(same?1:2)+".",
+      "# Duplex regions, A range : B range (1-based; each A range pairs antiparallel with its B range):",
+      ...cxSegments(c).map(s=>`#   A ${s.aStart+1}–${s.aEnd+1}  ↔  B ${s.bStart+1}–${s.bEnd+1}`),
+      `@complex A=1 B=${same?1:2} mode=${c.mode||'replace'} regions=${segs.join(",")} name=${c.name||'complex'}`);
+  } else {
+    if(active<0 || M.n===0) return null;
+    saveActive(); const d=docs[active];
+    L.push(">"+(d.name||"seq"), cleanPasted(d.seq), cleanPasted(d.dot));
+  }
+  return L.join("\n")+"\n";
+}
+function colorFileText(){
+  const sts=strands(); if(!sts.length) return null;
+  const L=["# AptaRender color file — current colors of the open "+(CM.active?"complex":"sequence"),
+    "# Re-apply with Letters → Upload color file…   Format: position [base] color target",
+    "# (ranges a-b share one color; A:/B: = strand inside a complex)", ""];
+  sts.forEach(st=>{
+    const pre = CM.active ? st.tag+':' : '';
+    const emit=(get,target)=>{
+      let i=0;
+      while(i<st.n){
+        const col=get(i); if(!col){ i++; continue; }
+        let j=i; while(j+1<st.n && get(j+1)===col) j++;
+        L.push(i===j ? `${(pre+(i+1)).padEnd(8)}${st.seq[i]}  ${col}  ${target}`
+                     : `${(pre+(i+1)+'-'+(j+1)).padEnd(8)}   ${col}  ${target}`);
+        i=j+1;
+      }
+    };
+    if(CM.active) L.push(`# strand ${st.tag}`);
+    emit(i=>st.color[i], 'letter');
+    if(Object.keys(st.circleColor||{}).length) emit(i=>st.circleColor[i], 'circle');
+  });
+  return L.join("\n")+"\n";
+}
+
 /* ---------- render ---------- */
 const svg=$("canvas");
 function render(){
@@ -1908,6 +1993,17 @@ function updateBondInfo(){
 // the midpoint of every selected base whose sequence neighbour is NOT selected — for a stem/branch
 // that's the midpoint of its base rung, so the stem swings about where it joins the rest. Applied
 // through the same offX/offY channel drag uses, so it composes with earlier manual moves.
+// "joint" pivot: the unselected base(s) a selection hangs from (sequence neighbours just outside each
+// selected run). Rotating a free end about its joint swings the bond to the rest of the molecule —
+// the "attach" pivot sits on the end's own first base, so that bond's direction can't change.
+function jointPivot(sts){
+  const pts=[];
+  for(const st of sts) st.sel.forEach(i=>{
+    for(const k of [i-1,i+1]) if(k>=0 && k<st.n && !st.sel.has(k)) pts.push({x:effX(st,k),y:effY(st,k)});
+  });
+  if(!pts.length) return null;
+  const c={x:0,y:0}; for(const q of pts){ c.x+=q.x/pts.length; c.y+=q.y/pts.length; } return c;
+}
 function rotateSelection(deg, pivotMode){
   const sts=strands(), sel=[], edge=[];
   for(const st of sts){
@@ -1923,6 +2019,7 @@ function rotateSelection(deg, pivotMode){
   if(!sel.length) return false;
   const src = (pivotMode==='attach' && edge.length) ? edge : sel;
   let px=0,py=0; for(const p of src){ px+=p.x; py+=p.y; } px/=src.length; py/=src.length;
+  const jp = pivotMode==='joint' ? jointPivot(sts) : null; if(jp){ px=jp.x; py=jp.y; }
   const a=deg*Math.PI/180, c=Math.cos(a), s=Math.sin(a);
   for(const p of sel){
     const dx=p.x-px, dy=p.y-py;
@@ -1931,6 +2028,104 @@ function rotateSelection(deg, pivotMode){
   }
   render();
   return true;
+}
+// Mirror the selected bases (or, with nothing selected, every base) across a line through the pivot.
+// `axis` is what the user sees: 'h' = flip left<->right on SCREEN, 'v' = flip top<->bottom on screen.
+// The view rotation M.rot is applied on top of model coords at display time, so the screen axis is
+// mapped back into model space first; otherwise a flip at rot != 0 would mirror along a slant.
+// Same offX/offY channel as rotateSelection, so it composes with drags and is undoable via touch().
+// Pivot reuses rotateSelection's rule (attachment-point midpoint, else centroid); the whole-drawing
+// flip always uses the centroid, which keeps the drawing in place on screen.
+function flipSelection(axis, pivotMode){
+  const sts=strands(), sel=[], edge=[];
+  const any=sts.some(st=>st.sel.size>0);
+  for(const st of sts){
+    const isEdge=i=>(i>0 && !st.sel.has(i-1)) || (i<st.n-1 && !st.sel.has(i+1));
+    const idx = any ? [...st.sel] : [...Array(st.n).keys()];
+    for(const i of idx){
+      const p={st,i,x:effX(st,i),y:effY(st,i)}; sel.push(p);
+      if(!any) continue;
+      const j=st.pt[i];
+      if(isEdge(i) || (j!==-1 && st.sel.has(j) && isEdge(j))) edge.push(p);
+    }
+  }
+  if(!sel.length) return 0;
+  const src = (any && pivotMode==='attach' && edge.length) ? edge : sel;
+  let px=0,py=0; for(const p of src){ px+=p.x; py+=p.y; } px/=src.length; py/=src.length;
+  const jp = (any && pivotMode==='joint') ? jointPivot(sts) : null; if(jp){ px=jp.x; py=jp.y; }
+  // mirror line direction in model space: screen vertical (h-flip) / screen horizontal (v-flip),
+  // rotated by -M.rot (display = R(M.rot) * model)
+  const a=M.rot*Math.PI/180;
+  const ux = axis==='h' ? Math.sin(a) :  Math.cos(a);
+  const uy = axis==='h' ? Math.cos(a) : -Math.sin(a);
+  for(const p of sel){
+    const dx=p.x-px, dy=p.y-py, t=dx*ux+dy*uy;          // reflect: 2(d·u)u - d
+    const nx=px+2*t*ux-dx, ny=py+2*t*uy-dy;
+    p.st.offX[p.i]=(p.st.offX[p.i]||0)+(nx-p.x);
+    p.st.offY[p.i]=(p.st.offY[p.i]||0)+(ny-p.y);
+  }
+  render();
+  return any ? 1 : 2;
+}
+// Bend each selected contiguous run of bases into a circular arc of constant per-bond turn κ.
+//   tail run (one end attached to an unselected neighbour = the anchor): walked out from the anchor,
+//     first bond keeps its current direction, every later bond turns by κ, bond length = SPACING.
+//   bridge run (unselected neighbours on both sides): evenly spaced on the arc through both
+//     neighbours (equal chords; length follows from the gap, κ=0 is a straight line).
+// `dir` 'cw'/'ccw' adds ±step to the run's CURRENT mean turn (repeated clicks curl tighter; the
+// other button flattens, then reverses); 'flat' sets κ=0. Direction is on SCREEN as the run leaves its
+// anchor (tail) or runs 5'→3' (bridge): model space is y-down and display is a pure rotation of it
+// (flips are baked into offsets), so a positive κ under rot() is always clockwise on screen.
+// (An inward/outward rule was tried first: any reference point — the rest's centroid or the anchor's
+// pair partner — is a tie when the curve heads straight away from it, which is exactly how a ring
+// around a helix end starts, so the button's direction flipped unpredictably.)
+function bendSelection(dir, stepDeg){
+  const sts=strands(), S=SPACING, step=(Math.abs(+stepDeg)||5)*Math.PI/180;
+  const rot=(v,t)=>({x:v.x*Math.cos(t)-v.y*Math.sin(t), y:v.x*Math.sin(t)+v.y*Math.cos(t)});
+  const cross=(a,b)=>a.x*b.y-a.y*b.x, unit=v=>{ const l=Math.hypot(v.x,v.y)||1; return {x:v.x/l,y:v.y/l}; };
+  const P=(st,i)=>({x:effX(st,i),y:effY(st,i)});
+  const turns=pts=>{ const t=[]; for(let k=1;k<pts.length-1;k++){
+      const a={x:pts[k].x-pts[k-1].x,y:pts[k].y-pts[k-1].y}, b={x:pts[k+1].x-pts[k].x,y:pts[k+1].y-pts[k].y};
+      t.push(Math.atan2(cross(a,b), a.x*b.x+a.y*b.y)); } return t; };
+  const MAXK=60*Math.PI/180, sgn = dir==='cw' ? 1 : -1;
+  let done=0, skipped=0;
+  sts.forEach((st,s)=>{
+    const idx=[...st.sel].sort((a,b)=>a-b);
+    for(let r=0;r<idx.length;){
+      let e=r; while(e+1<idx.length && idx[e+1]===idx[e]+1) e++;
+      const i=idx[r], j=idx[e], hasL=i>0, hasR=j<st.n-1; r=e+1;
+      if(!hasL && !hasR){ skipped++; continue; }           // whole strand selected: nothing to hang from
+      const out=[];                                        // new positions, in walk order
+      if(hasL && hasR){                                    // ---- bridge between i-1 and j+1
+        const a=P(st,i-1), b=P(st,j+1), m=j-i+1, D=Math.hypot(b.x-a.x,b.y-a.y);
+        if(D<1e-6){ skipped++; continue; }
+        const pts=[a]; for(let k=i;k<=j;k++) pts.push(P(st,k)); pts.push(b);
+        const tt=turns(pts); let kap=tt.reduce((x,y)=>x+y,0)/tt.length;
+        const u=unit({x:b.x-a.x,y:b.y-a.y});
+        kap = dir==='flat' ? 0 : kap + sgn*step;
+        kap=Math.max(-330*Math.PI/180/(m+1), Math.min(330*Math.PI/180/(m+1), kap));
+        const Th=kap*(m+1); let sc=0; const hd=[];
+        for(let k=0;k<=m;k++){ const th=-Th/2+kap*(k+0.5); hd.push(th); sc+=Math.cos(th); }
+        const L=D/sc; let p={...a};
+        for(let k=0;k<m;k++){ const h=rot(u,hd[k]); p={x:p.x+L*h.x,y:p.y+L*h.y}; out.push(p); }
+        for(let k=0;k<m;k++){ const q=out[k], ii=i+k; st.offX[ii]=(st.offX[ii]||0)+q.x-effX(st,ii); st.offY[ii]=(st.offY[ii]||0)+q.y-effY(st,ii); }
+      } else {                                             // ---- tail hanging from one anchor
+        const anc = hasL ? i-1 : j+1, order=[];
+        if(hasL) for(let k=i;k<=j;k++) order.push(k); else for(let k=j;k>=i;k--) order.push(k);
+        const a=P(st,anc), pts=[a, ...order.map(k=>P(st,k))];
+        const tt=turns(pts); let kap=tt.length ? tt.reduce((x,y)=>x+y,0)/tt.length : 0;
+        let h=unit({x:pts[1].x-a.x,y:pts[1].y-a.y});
+        kap = dir==='flat' ? 0 : kap + sgn*step;
+        kap=Math.max(-MAXK,Math.min(MAXK,kap));
+        let p={...a};
+        for(const k of order){ p={x:p.x+S*h.x,y:p.y+S*h.y}; out.push([k,p]); h=rot(h,kap); }
+        for(const [k,q] of out){ st.offX[k]=(st.offX[k]||0)+q.x-effX(st,k); st.offY[k]=(st.offY[k]||0)+q.y-effY(st,k); }
+      }
+      done++;
+    }
+  });
+  if(done) render();
+  return {done, skipped};
 }
 
 /* ---------- interaction: pan / zoom / select / drag / marquee ----------
@@ -2085,26 +2280,37 @@ function defaultExportName(){
   const nm = CM.active ? (complexes[CM.idx]&&complexes[CM.idx].name) : (docs[active]&&docs[active].name);
   return nm || "aptarender";
 }
-function exportFileName(ext){
+// `suffix` (e.g. "_strands") goes before the extension, for the text files saved next to an image.
+function exportFileName(ext, suffix){
   let base=($("expName").value||"").trim() || defaultExportName();
-  base=base.replace(/\.(svg|png)$/i,"").replace(/[\\/:*?"<>|\u0000-\u001f]+/g,"_").replace(/\s+/g," ").trim() || "aptarender";
-  return base+"."+ext;
+  base=base.replace(/\.(svg|png|txt)$/i,"").replace(/[\\/:*?"<>|\u0000-\u001f]+/g,"_").replace(/\s+/g," ").trim() || "aptarender";
+  return base+(suffix||"")+"."+ext;
 }
 const canPickSave = typeof window.showSaveFilePicker==="function";
+const SAVE_TYPES={svg:["SVG image","image/svg+xml"], png:["PNG image","image/png"], txt:["Text file","text/plain"]};
 // With "Open a Save dialog" ticked (Chrome/Edge), the system Save dialog opens pre-filled with the
 // name so the file can be renamed and placed anywhere; otherwise it's an ordinary download.
-async function saveBlob(blob, ext){
-  const name=exportFileName(ext);
+async function saveBlob(blob, ext, suffix){
+  const name=exportFileName(ext, suffix);
   if(canPickSave && $("expAsk").checked){
     try{
+      const [desc,mime]=SAVE_TYPES[ext]||SAVE_TYPES.txt;
       const h=await window.showSaveFilePicker({suggestedName:name,
-        types:[{description:ext.toUpperCase()+" image", accept:{[ext==="svg"?"image/svg+xml":"image/png"]:["."+ext]}}]});
+        types:[{description:desc, accept:{[mime]:["."+ext]}}]});
       const w=await h.createWritable(); await w.write(blob); await w.close();
       return;
     }catch(err){ if(err && err.name==="AbortError") return; }   // cancelled -> do nothing; other errors fall through
   }
   download(name, blob);
 }
+function saveText(text, suffix, infoId){
+  if(!text){ $(infoId).textContent="Render a sequence first."; return; }
+  $(infoId).textContent="";
+  saveBlob(new Blob([text],{type:"text/plain"}), "txt", suffix);
+}
+$("expStrands").onclick=()=>saveText(strandsFileText(), "_strands", "expInfo");
+$("expColors").onclick =()=>saveText(colorFileText(),   "_colors",  "expInfo");
+$("colorSave").onclick =()=>saveText(colorFileText(),   "_colors",  "colorFileInfo");
 $("expSvg").onclick=()=>{ if(!hasContent())return;
   saveBlob(new Blob([buildExportSVG().svg],{type:"image/svg+xml"}), "svg"); };
 $("expPng").onclick=()=>{ if(!hasContent())return;
@@ -2363,24 +2569,47 @@ function renderDocList(){
   $("docHint").textContent=defaultHint();
   refreshComplexPickers();
 }
+// "#" lines are comments; "@complex …" lines (written by strandsFileText) are collected in recs.cx.
+function parseComplexLine(line){
+  const g=k=>{ const m=new RegExp("(?:^|\\s)"+k+"=(\\S+)").exec(line); return m?m[1]:null; };
+  const nm=/(?:^|\s)name=(.*)$/.exec(line);
+  const regs=(g("regions")||"").split(",").map(r=>/^(\d+)-(\d+):(\d+)-(\d+)$/.exec(r)).filter(Boolean)
+    .map(m=>({aStart:+m[1]-1,aEnd:+m[2]-1,bStart:+m[3]-1,bEnd:+m[4]-1}));
+  return {a:+g("A"), b:+g("B"), mode:g("mode")==='side'?'side':'replace', segs:regs, name:nm?nm[1].trim():'complex'};
+}
 function parseFasta(text){
-  const lines=text.split(/\r?\n/); const recs=[]; let cur=null;
+  const lines=text.split(/\r?\n/); const recs=[]; let cur=null; recs.cx=[];
   for(const raw of lines){
-    const line=raw.trim(); if(!line) continue;
+    const line=raw.trim(); if(!line || line[0]==='#') continue;
+    if(/^@complex\b/i.test(line)){ recs.cx.push(parseComplexLine(line)); continue; }
     if(line[0]==='>'){ cur={name:line.slice(1).trim()||('seq '+(recs.length+1)),seq:'',dot:''}; recs.push(cur); }
     else { if(!cur){ cur={name:'seq '+(recs.length+1),seq:'',dot:''}; recs.push(cur); }
       if(cur.seq && /^[-().:,\[\]{}<>]+$/.test(line)) cur.dot+=line; else cur.seq+=line.replace(/\s+/g,''); }
   }
-  return recs.filter(r=>r.seq);
+  const out=recs.filter(r=>r.seq); out.cx=recs.cx; return out;
 }
 function importFasta(text){
   const recs=parseFasta(text);
   if(!recs.length){ $("docHint").textContent="No sequences found in that file."; return; }
   saveActive(); const firstNew=docs.length; let added=0;
   for(const r of recs){ if(docs.length>=LIMIT) break; docs.push(newDoc(r.name,r.seq,r.dot)); added++; }
+  // rebuild any complexes the file describes (A/B are 1-based record numbers within this file)
+  let opened=-1; const cxNotes=[];
+  for(const x of recs.cx||[]){
+    if(!(x.a>=1 && x.a<=added && x.b>=1 && x.b<=added) || !x.segs.length){
+      cxNotes.push(`complex "${x.name}" skipped (its strands weren't imported)`); continue; }
+    complexes.push(newComplex(x.name, firstNew+x.a-1, firstNew+x.b-1, x.segs, x.mode));
+    opened=complexes.length-1;
+  }
   if(added>0) applyDoc(firstNew);
+  renderComplexList();
+  if(opened>=0 && !openComplex(opened)) cxNotes.push("the complex was added but couldn't be drawn — see the Complex tab");
   pushHistory();
-  if(recs.length>added) $("docHint").textContent=`Added ${added}; ${recs.length-added} skipped (limit ${LIMIT}).`;
+  const notes=[];
+  if(recs.length>added) notes.push(`Added ${added}; ${recs.length-added} skipped (limit ${LIMIT}).`);
+  if(opened>=0) notes.push(`Rebuilt complex "${complexes[opened].name}".`);
+  notes.push(...cxNotes);
+  if(notes.length) $("docHint").textContent=notes.join(" ");
 }
 // ONE serializer for both localStorage and undo snapshots (they used to be two hand-written field
 // lists that had drifted: localStorage silently dropped each complex's `mode`, so a side-by-side
@@ -2559,6 +2788,19 @@ $("rotSelGo").onclick=()=>{
   if(!Number.isFinite(deg)){ $("rotSelInfo").textContent="Enter an angle in degrees."; return; }
   if(rotateSelection(deg,$("rotSelPivot").value)){ $("rotSelInfo").textContent=""; touch(); }
   else $("rotSelInfo").textContent="Select some bases first (click, Shift+drag, or Ctrl/⌘+click a part).";
+};
+for(const [id,dir] of [["bendCW","cw"],["bendCCW","ccw"],["bendFlat","flat"]]) $(id).onclick=()=>{
+  if(!selCount()){ $("bendInfo").textContent="Select the bases to bend first (Ctrl/⌘+click a free end or loop, or Shift+drag)."; return; }
+  const r=bendSelection(dir,$("bendStep").value);
+  $("bendInfo").textContent = !r.done ? "Nothing to bend: the selection needs an unselected neighbour to hang from."
+    : (r.skipped ? `Bent ${r.done}; skipped ${r.skipped} (whole strand selected).` : "");
+  if(r.done) touch();
+};
+for(const [id,axis] of [["flipH","h"],["flipV","v"]]) $(id).onclick=()=>{
+  if(!hasContent()){ $("rotSelInfo").textContent="Render a sequence first."; return; }
+  const r=flipSelection(axis,$("rotSelPivot").value);
+  $("rotSelInfo").textContent = r===2 ? "Flipped the whole drawing (nothing was selected)." : "";
+  touch();
 };
 // H-bonds (single-sequence mode only — complexes don't support per-bond click-select in this version)
 $("applyBond").onclick=()=>{const c=$("bondColor").value; M.selBond.forEach(i=>M.bondColor[i]=c); render(); touch();};

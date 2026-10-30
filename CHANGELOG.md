@@ -2,6 +2,41 @@
 
 All notable changes to AptaRender. Newest first.
 
+## 2026-10-30 — v2.2.3
+- **Bend selected curve** (Layout tab): select a stretch of unpaired bases (a free end or a loop) and
+  click **↻ Curl clockwise** or **↺ Curl counter-clockwise** to bend it into a smooth arc; each click
+  curls it more, the other button flattens it and then bends it the other way, and **Straighten**
+  makes it a straight line. The **Step** box sets how much each click adds (degrees per base). Bases
+  stay one bond apart and the base the stretch hangs from doesn't move. A loop between two fixed
+  bases is spread evenly along an arc between them. Undoable; exports as shown.
+- **New "Joint" pivot** for Rotate selected and the flips: turns the selection about the unselected
+  base it hangs from, so a free end can be swung to set off in a new direction before curling it.
+- Example (NanoCluster Beacon, case 6): Flip ↔, Flip ↕, then curl the G-rich end ↻ 13° and the C-rich
+  end ↻ 21°: two concentric rings, G outside and C inside, nothing overlapping.
+
+## 2026-10-30 — v2.2.2
+- **Save strands as text** (Export tab → **Strands .txt**): writes the open sequence, or both strands of
+  the open complex, as a plain text file: `>name`, sequence, dot-bracket structure (readable as FASTA).
+  A complex also gets one `@complex` line with its duplex regions, mode and name. Re-open it with
+  Input → **Import file…** and the sequences and the complex are rebuilt, so nothing has to be
+  pasted back in by hand.
+- **Save colors as text** (Export tab → **Colors .txt**, or Letters tab → **Save current colors**): writes the
+  letter and circle colors you see now, in the same format **Upload color file…** reads (runs of one
+  color become ranges; `A:`/`B:` prefixes in a complex). Uploading it later restores every color.
+- Files are named after the sequence/complex (or the File name box) with `_strands.txt` / `_colors.txt`,
+  and use the Save dialog when that box is ticked.
+- Import file now ignores `#` comment lines.
+- Not saved in either file: hand-placed positions/flips, bond colors and per-base sizes.
+
+## 2026-10-30 — v2.2.1
+- **Flip / mirror** (Layout tab → Rotate / flip selection): new **Flip ↔ horizontal** and **Flip ↕ vertical**
+  buttons. With bases selected they mirror just the selection about the chosen pivot (attachment point
+  or center); with nothing selected they mirror the whole drawing about its center. The flip is always
+  along the screen's own axes, even when the view is rotated, and letters stay upright and readable.
+  Works in single-sequence and complex views, one undo step per flip, and exports as shown.
+  Example: a complex drawn with its duplex on the right can be flipped ↔ to match a figure with the
+  duplex on the left, without turning it upside down the way a 180° rotation would.
+
 ## 2026-10-28 — v2.2.0
 - **Multiple duplex regions in a complex.** A two-strand complex can now hybridize over several
   separate regions at once (e.g. A 1–11 & 16–27 with B 2–12 & 16–27) instead of a single
